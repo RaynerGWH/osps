@@ -186,7 +186,25 @@ function joinModal(){
 function playerModal(id){
   const s=state.session,p=s.players.find(p=>p.id===Number(id));if(!p)return;
   const entries=s.buyins.filter(b=>b.player===p.id),edit=s.status==='active'&&editable(p);
-  modal(esc(p.name),`<div class="buyin-list">${entries.length?entries.map(b=>`<div class="buyin-entry ${b.voided?'removed':''}"><span>${money(b.amount)}<small>${date(b.created)} · ${time(b.created)}${b.voided?' · Removed':''}</small></span>${edit&&!b.voided?`<button class="remove" data-action="remove" data-id="${b.id}" aria-label="Remove ${money(b.amount)} buy-in">×</button>`:''}</div>`).join(''):'<p class="inline-note">No buy-ins.</p>'}</div>${edit?`<form id="player-buyin"><input type="hidden" name="player_id" value="${p.id}"><label for="extra-amount">Add buy-in</label>${amountField('extra-amount')}<div class="dialog-actions"><button class="button primary" type="submit">Add buy-in</button></div></form>`:`<div class="cash-balance"><span>Buy-in <strong>${money(p.buyin)}</strong></span>${p.cashout!==null?`<span>Final <strong>${money(p.cashout)}</strong></span>`:''}</div>`}`);
+  modal(esc(p.name),`${editable(p)?`<div class="player-tools"><button type="button" class="text-button" data-action="rename-player" data-id="${p.id}">Edit name</button></div>`:''}<div class="buyin-list">${entries.length?entries.map(b=>`<div class="buyin-entry ${b.voided?'removed':''}"><span>${money(b.amount)}<small>${date(b.created)} · ${time(b.created)}${b.voided?' · Removed':''}</small></span>${edit&&!b.voided?`<button class="remove" data-action="remove" data-id="${b.id}" aria-label="Remove ${money(b.amount)} buy-in">×</button>`:''}</div>`).join(''):'<p class="inline-note">No buy-ins.</p>'}</div>${edit?`<form id="player-buyin"><input type="hidden" name="player_id" value="${p.id}"><label for="extra-amount">Add buy-in</label>${amountField('extra-amount')}<div class="dialog-actions"><button class="button primary" type="submit">Add buy-in</button></div></form>`:`<div class="cash-balance"><span>Buy-in <strong>${money(p.buyin)}</strong></span>${p.cashout!==null?`<span>Final <strong>${money(p.cashout)}</strong></span>`:''}</div>`}`);
+}
+function renamePlayerModal(id){
+  const p=state.session.players.find(p=>p.id===Number(id));if(!p||!editable(p))return;
+  modal('Edit name',`<form id="rename-player-form"><input type="hidden" name="player_id" value="${p.id}"><div class="field"><label for="edit-player-name">Name</label><input id="edit-player-name" name="name" required maxlength="40" autocomplete="off" value="${esc(p.name)}"></div><div class="dialog-actions"><button type="button" class="button" data-action="player" data-id="${p.id}">Cancel</button><button type="submit" class="button primary">Save name</button></div></form>`);
+}
+async function renamePlayer(id,name){
+  const code=state.session.code;
+  const saved=await api(`/api/sessions/${code}/rename`,{player_id:id,name});
+  const updated=saved.players.find(p=>p.id===id);
+  state.roster=[];
+  if(state.session.code!==code)return;
+  // Merge the name only: a payment may have finished saving in the meantime.
+  const player=state.session.players.find(p=>p.id===id);
+  if(player&&updated){
+    player.name=updated.name;
+    for(const entry of state.session.buyins)if(entry.player===id)entry.name=updated.name;
+  }
+  $('#modal').close();render();toast('Name updated.');
 }
 function cents(value){if(!/^\d{1,6}([.]\d{1,2})?$/.test(value))return null;const [whole,fraction='']=value.split('.');return Number(whole)*100+Number(fraction.padEnd(2,'0'));}
 function cashoutModal(){
@@ -253,6 +271,7 @@ document.addEventListener('click',async event=>{
     if(action==='retry-players'){$('#modal-error').classList.add('hidden');el.remove();return loadPlayerOptions();}
     if(action==='buyin')return buyinModal();
     if(action==='player')return playerModal(el.dataset.id);
+    if(action==='rename-player')return renamePlayerModal(el.dataset.id);
     if(action==='cashouts')return cashoutModal();
     if(action==='join')return joinModal();
     if(action==='new')return newSession();
@@ -298,6 +317,7 @@ document.addEventListener('submit',async event=>{
   const data=Object.fromEntries(new FormData(form));
   try{
     if(form.id==='new-session'){const result=await api('/api/sessions',data);await refreshSessions();$('#modal').close();await openSession(result.code);}
+    if(form.id==='rename-player-form')await renamePlayer(Number(data.player_id),data.name);
     if(form.id==='buyin-form'||form.id==='player-buyin'){
       if(cents(data.amount)===null||cents(data.amount)===0)throw new Error('Enter a buy-in greater than $0.00.');
       const choice=form.id==='buyin-form'?buyinChoice(data.name,data.amount):{action:'buyin',body:{player_id:Number(data.player_id),amount:data.amount}};

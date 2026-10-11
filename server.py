@@ -311,6 +311,16 @@ def mutate(db, path, body, device):
         raise UserError('Unknown action.', 404)
     code, action = match.groups()
     session = get_session(db, code)
+    if action == 'rename':
+        player = get_player(db, session, body.get('player_id'), device)
+        name = clean_name(body.get('name'))
+        if any(p['id'] != player['id'] and p['name'].casefold() == name.casefold()
+               for p in player_rows(db, code)):
+            raise UserError('That name is already at the table. Choose another name.')
+        if name != player['name']:
+            db.execute('UPDATE players SET name=? WHERE id=?', (name, player['id']))
+            audit(db, code, '%s renamed to %s' % (player['name'], name), 'rename')
+        return view(db, code, device)
     if action == 'paid':
         if session['status'] != 'settled':
             raise UserError('Settle the session first.')

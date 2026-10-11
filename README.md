@@ -20,6 +20,8 @@ The player picker starts with Aloysius, Arden, Brendon, Byron, Febie, Isaiah, Mi
 
 Names are remembered from non-sample sessions hosted or joined by the current browser, using the existing Supabase data (or SQLite locally). New names become available after they are saved in a session. Capitalisation variants are combined in the picker, and unrelated private sessions are excluded. No new table or migration is needed. The saved list reuses names; it does not grant another player's permissions or create a cross-device account.
 
+To correct a typo, open the player's name and choose **Edit name**. Hosts can edit anyone in their session; joined players can edit their own name. Corrections also work after settlement and update that session's buy-in history, payment names, and copied summary. Player IDs, amounts, payment status, and access stay unchanged. Names cannot be blank or duplicate another player at the table. The saved picker uses the corrected name from that session; other sessions keep their own names.
+
 **Buy-in history** below the table shows every entry, newest first, with the player, amount, date, and Singapore time. Removed entries remain visible and are excluded from totals. The same log remains available after settlement.
 
 **Session history** lists saved games with their date, status, and total buy-ins. Open any game to see its full ledger and settlement. Older games load in pages, with no lifetime session limit or automatic expiry. Starting a new session leaves all earlier sessions intact. Records remain in the configured database; they do not depend on keeping the app open.

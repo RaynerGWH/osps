@@ -136,6 +136,7 @@ input[readonly]{opacity:.6}
 .cash-balance{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-top:21px;font-size:12px;line-height:1.8}
 .cash-balance strong{font-weight:600;color:var(--green)}
 .buyin-list{margin:0 0 25px}
+.player-tools{display:flex;justify-content:flex-end;margin-bottom:16px}
 .buyin-entry{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:14px 0;border-bottom:1px solid var(--line);font-size:15px}
 .buyin-entry small{display:block;color:var(--muted);font-size:12px;margin-top:7px;line-height:1.6}
 .buyin-entry .remove{background:none;color:var(--muted);border:0;width:30px;height:30px;font-size:22px}

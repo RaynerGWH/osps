@@ -171,3 +171,34 @@ test('saved names reuse current players and never carry player IDs into another 
   assert.throws(()=>member.buyinChoice('Rayner','50'),/only add your own/);
   assert.throws(()=>member.buyinChoice('Arden','50'),/Choose your name/);
 });
+
+test('renaming updates history and summary without undoing a concurrent payment',async()=>{
+  const {context,requests,current}=paymentClient();
+  context.document.querySelector=()=>({close(){}});
+  context.toast=()=>{};
+  vm.runInContext("state.session.buyins=[{player:1,name:'A',amount:10000}];state.roster=['A'];",context);
+  const renaming=context.renamePlayer(1,'Arden');
+  assert.equal(current().players[0].name,'A');
+  const paying=context.setPaymentPaid(1,true);
+  requests[1].resolve({transfers:[{id:1,paid:true}]});
+  await paying;
+  requests[0].resolve({players:[{id:1,name:'Arden',buyin:999}],transfers:[{id:1,paid:false}]});
+  await renaming;
+  assert.equal(current().players[0].name,'Arden');
+  assert.equal(current().players[0].buyin,10000);
+  assert.equal(current().transfers[0].paid,true);
+  assert.equal(current().buyins[0].name,'Arden');
+  assert.match(context.summary(),/Arden → B: \$100\.00 · PAID/);
+  assert.equal(vm.runInContext('state.roster.length',context),0);
+});
+
+test('name editor is escaped and only available for an editable player',()=>{
+  const context=rosterClient('player');let html='';
+  context.modal=(_title,body)=>{html=body;};
+  context.renamePlayerModal(1);
+  assert.equal(html,'');
+  vm.runInContext("state.session.players[1].name='<Min>';",context);
+  context.renamePlayerModal(2);
+  assert.match(html,/value="&lt;Min&gt;"/);
+  assert.match(html,/>Save name</);
+});

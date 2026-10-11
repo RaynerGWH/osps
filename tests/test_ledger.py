@@ -242,6 +242,34 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaises(server.UserError):
             self.call(self.path + 'settle', {'values': [{'player_id': a, 'amount': '200'}]})
 
+    def test_rename_permissions_validation_and_settled_money_are_preserved(self):
+        self.call(self.path + 'players', {'name': 'Tyop', 'amount': '100'})
+        state = self.call(self.path + 'join', {'name': 'Frend'}, self.friend)
+        first, second = state['players'][0]['id'], state['my_player_id']
+        state = self.call(self.path + 'rename', {'player_id': second, 'name': '  Friend  '}, self.friend)
+        self.assertEqual(state['players'][1]['name'], 'Friend')
+        self.assertEqual(state['my_player_id'], second)
+        for device, player_id, name in [('outsider', first, 'No'), (self.friend, first, 'No'),
+                                        (self.host, first, ''), (self.host, first, 'x' * 41),
+                                        (self.host, first, 'fRIEnd'), (self.host, 9999, 'No')]:
+            with self.assertRaises(server.UserError):
+                self.call(self.path + 'rename', {'player_id': player_id, 'name': name}, device)
+        self.call(self.path + 'buyin', {'player_id': second, 'amount': '100'}, self.friend)
+        settled = self.call(self.path + 'settle', {'values': [{'player_id': first, 'amount': '50'}, {'player_id': second, 'amount': '150'}]})
+        before = self.call(self.path + 'paid', {'transfer_id': settled['transfers'][0]['id'], 'paid': True})
+        after = self.call(self.path + 'rename', {'player_id': first, 'name': 'Taylor'})
+        self.assertEqual(after['status'], 'settled')
+        self.assertEqual(after['settled_at'], before['settled_at'])
+        self.assertEqual(after['transfers'], before['transfers'])
+        self.assertEqual(after['players'][0], dict(before['players'][0], name='Taylor'))
+        self.assertEqual(after['players'][1], before['players'][1])
+        self.assertEqual(after['buyins'], [dict(b, name='Taylor') if b['player'] == first else b for b in before['buyins']])
+        with server.database() as db:
+            names = server.saved_players(db, self.host)['players']
+        self.assertIn('Taylor', names)
+        self.assertNotIn('Tyop', names)
+        self.assertNotIn('Frend', names)
+
 
 class HttpTests(unittest.TestCase):
     call = LedgerTests.call

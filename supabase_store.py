@@ -196,6 +196,14 @@ class SupabaseStore:
             raise self.domain.UserError('Enter a final amount for every player exactly once.')
 
     def apply(self, row, action, body, device):
+        if action == 'rename':
+            player = self.player(row, body.get('player_id'), device)
+            name = self.domain.clean_name(body.get('name'))
+            if any(p['id'] != player['id'] and p['name'].casefold() == name.casefold()
+                   for p in row['players']):
+                raise self.domain.UserError('That name is already at the table. Choose another name.')
+            player['name'] = name
+            return
         if action == 'paid':
             if row['status'] != 'settled':
                 raise self.domain.UserError('Settle the session first.')

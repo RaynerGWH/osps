@@ -229,6 +229,14 @@ class SupabaseStore:
             raise self.domain.UserError('Enter a final amount for every player exactly once.')
 
     def apply(self, row, action, body, device):
+        if action == 'reopen':
+            if row['status'] == 'active':
+                return
+            if body.get('settled_at') != row['settled_at']:
+                raise self.domain.UserError('This settlement has changed. Refresh the session and try again.', 409)
+            row['transfers'] = []
+            row['status'], row['settled_at'], row['minimum_proven'] = 'active', None, False
+            return
         if action == 'rename':
             player = self.player(row, body.get('player_id'), device)
             name = self.domain.clean_name(body.get('name'))
@@ -240,6 +248,8 @@ class SupabaseStore:
         if action == 'paid':
             if row['status'] != 'settled':
                 raise self.domain.UserError('Settle the session first.')
+            if body.get('settled_at') != row['settled_at']:
+                raise self.domain.UserError('This settlement has changed. Refresh the session and try again.', 409)
             t = next((t for t in row['transfers'] if t['id'] == body.get('transfer_id')), None)
             if t is None:
                 raise self.domain.UserError('That transfer could not be found.')

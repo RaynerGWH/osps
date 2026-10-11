@@ -63,7 +63,7 @@ function render(){
   renderNavigation();
   $('#app').innerHTML=`<header class="session-bar ${animate?'enter':''}">
     <div class="session-title"><div class="date"><span>${date(s.created)}</span><span class="meta-separator" aria-hidden="true">·</span><span>SGD</span>${s.demo?'<span class="badge">Sample</span>':''}<span class="status-pill ${closed?'settled':'live'}">${closed?'Settled':'In progress'}</span></div><h1>${esc(s.name)}</h1></div>
-    <div class="actions">${closed?'<button class="button primary" data-action="copy">Copy summary</button>':guest?'<button class="button primary" data-action="join">Join session</button>':`<button class="button primary" data-action="buyin"><span aria-hidden="true">+</span> Add buy-in</button><button class="button" data-action="cashouts" ${s.players.length&&s.total_buyin?'':'disabled'}>${host?'Settle up':'Final amount'}</button>`}${host?'<details class="session-menu"><summary aria-label="Session options" title="Session options"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></summary><div class="session-menu-items"><button data-action="delete-session">Delete session</button></div></details>':''}</div>
+    <div class="actions">${closed?'<button class="button primary" data-action="copy">Copy summary</button><button class="button" data-action="reopen-session">Reopen session</button>':guest?'<button class="button primary" data-action="join">Join session</button>':`<button class="button primary" data-action="buyin"><span aria-hidden="true">+</span> Add buy-in</button><button class="button" data-action="cashouts" ${s.players.length&&s.total_buyin?'':'disabled'}>${host?'Settle up':'Final amount'}</button>`}${host?'<details class="session-menu"><summary aria-label="Session options" title="Session options"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></summary><div class="session-menu-items"><button data-action="delete-session">Delete session</button></div></details>':''}</div>
   </header><div id="connection"></div>
   <section class="table-frame ${animate?'enter enter-delay':''}"><div class="table-scroll"><table aria-label="Players and amounts"><thead><tr><th class="rank">#</th><th>Player</th><th class="numeric">Buy-ins</th>${closed?'<th class="numeric final-column">Cash out</th><th class="numeric">Net result</th>':''}</tr></thead><tbody>${ordered().map((p,i)=>`<tr class="${i<3?'top':''}"><td class="rank">${String(i+1).padStart(2,'0')}</td><td class="player-cell"><span class="player"><span class="player-dot" aria-hidden="true"></span><button data-action="player" data-id="${p.id}">${esc(p.name)}</button></span></td><td class="numeric">${money(p.buyin)}</td>${closed?`<td class="numeric final-column">${money(p.cashout)}</td><td class="numeric ${p.cashout>=p.buyin?'green':'red'}">${signed(p.cashout-p.buyin)}</td>`:''}</tr>`).join('')}</tbody></table></div>${!s.players.length?'<div class="empty">No buy-ins yet.</div>':''}<div class="total-row"><span>${s.players.length} player${s.players.length===1?'':'s'}</span><span>${closed?'Buy-ins / cash-outs':'Total buy-ins'}<strong>${money(s.total_buyin)}</strong></span></div></section>
   ${closed?settlementHTML():''}${buyinHistoryHTML()}`;
@@ -162,6 +162,22 @@ function deleteSessionModal(){
   $('.session-menu')?.removeAttribute('open');
   modal('Delete session?',`<p class="delete-session-name">${esc(s.name)}</p><p class="inline-note">This permanently removes its buy-ins, payments and results, including from the leaderboard.</p><div class="dialog-actions"><button class="button" data-action="close" autofocus>Cancel</button><button class="button danger" data-action="confirm-delete-session" data-code="${esc(s.code)}">Delete session</button></div>`);
   $('[data-action="close"]',$('.dialog-actions'))?.focus();
+}
+function reopenSessionModal(){
+  const s=state.session;if(s?.status!=='settled')return;
+  modal('Reopen session?',`<p class="delete-session-name">${esc(s.name)}</p><p class="inline-note">Keep the buy-ins and final amounts for editing. The payment plan and paid marks will be reset.</p><div class="dialog-actions"><button class="button" data-action="close" autofocus>Cancel</button><button class="button primary" data-action="confirm-reopen-session" data-code="${esc(s.code)}" data-settled-at="${esc(s.settled_at)}">Reopen session</button></div>`);
+  $('[data-action="close"]',$('.dialog-actions'))?.focus();
+}
+async function reopenSession(code,settledAt){
+  if(state.session?.code!==code||state.session.status!=='settled')return;
+  const saved=await api(`/api/sessions/${encodeURIComponent(code)}/reopen`,{settled_at:settledAt});
+  state.leaderboard=null;state.leaderboardRequest++;
+  if(state.session?.code!==code)return;
+  state.session=saved;
+  const listing=state.sessions.find(s=>s.code===code);if(listing){listing.status=saved.status;listing.unpaid_count=saved.transfers.filter(t=>!t.paid).length;}
+  $('#modal').close();render();toast(saved.status==='active'?'Session reopened.':'This session has already been settled again.');
+  try{await refreshSessions();}catch{/* The reopened session is already saved. */}
+  if(state.session?.code===code)render();
 }
 function forgetSession(code){
   state.sessions=state.sessions.filter(s=>s.code!==code);
@@ -280,7 +296,7 @@ function summary(){
 }
 async function refreshSessions(){state.sessions=(await api('/api/sessions')).sessions;}
 function pendingPaymentView(session){
-  for(const pending of state.paymentSaves.values())if(pending.code===session.code){
+  for(const pending of state.paymentSaves.values())if(pending.code===session.code&&pending.settledAt===session.settled_at){
     const transfer=session.transfers.find(t=>t.id===pending.id);if(transfer)transfer.paid=pending.paid;
   }
   return session;
@@ -288,26 +304,27 @@ function pendingPaymentView(session){
 async function openSession(code){state.session=pendingPaymentView(await api('/api/sessions/'+encodeURIComponent(code)));state.view='session';state.leaderboardRequest++;if(state.session.status==='active')state.currentCode=code;const url=new URL(location.href);url.searchParams.set('session',code);url.searchParams.delete('view');history.replaceState({},'',url);render();window.scrollTo(0,0);}
 async function save(action,body){state.session=await api(`/api/sessions/${state.session.code}/${action}`,body);$('#modal').close();render();}
 async function setPaymentPaid(id,paid){
-  const code=state.session.code,key=code+':'+id,transfer=state.session.transfers.find(t=>t.id===id);
+  const code=state.session.code,settledAt=state.session.settled_at,key=code+':'+id,transfer=state.session.transfers.find(t=>t.id===id);
   if(!transfer||state.paymentSaves.has(key))return;
   const previous=Boolean(transfer.paid);
-  state.paymentSaves.set(key,{code,id,paid});
+  state.paymentSaves.set(key,{code,id,paid,settledAt});
   transfer.paid=paid;
   render();
   try{
-    const saved=await api(`/api/sessions/${code}/paid`,{transfer_id:id,paid});
-    if(state.session?.code===code){
+    const saved=await api(`/api/sessions/${code}/paid`,{transfer_id:id,paid,settled_at:settledAt});
+    if(state.session?.code===code&&state.session.settled_at===settledAt){
+      if(saved.status&&saved.settled_at!==settledAt){state.session=pendingPaymentView(saved);render();return;}
       // Merge only this payment. Another payment may already have changed
       // while this response was in flight.
       const current=state.session.transfers.find(t=>t.id===id);
       if(current)current.paid=Boolean(saved.transfers.find(t=>t.id===id).paid);
     }
   }catch(err){
-    if(state.session?.code===code){const current=state.session.transfers.find(t=>t.id===id);if(current)current.paid=previous;}
+    if(state.session?.code===code&&state.session.settled_at===settledAt){const current=state.session.transfers.find(t=>t.id===id);if(current)current.paid=previous;}
     showError(err.message);
   }finally{
     state.paymentSaves.delete(key);
-    if(state.session?.code===code){
+    if(state.session?.code===code&&state.session.settled_at===settledAt){
       const focusedId=document.activeElement?.dataset?.transferId;
       render();
       if(focusedId)$(`input[data-transfer-id="${focusedId}"]`)?.focus({preventScroll:true});
@@ -331,6 +348,8 @@ document.addEventListener('click',async event=>{
     if(action==='cashouts')return cashoutModal();
     if(action==='join')return joinModal();
     if(action==='new')return newSession();
+    if(action==='reopen-session')return reopenSessionModal();
+    if(action==='confirm-reopen-session'){state.busy=true;el.disabled=true;await reopenSession(el.dataset.code,el.dataset.settledAt);return;}
     if(action==='delete-session')return deleteSessionModal();
     if(action==='confirm-delete-session'){state.busy=true;el.disabled=true;await deleteSession(el.dataset.code);return;}
     if(action==='history')return sessionHistory();

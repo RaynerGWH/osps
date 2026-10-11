@@ -377,6 +377,15 @@ def mutate(db, path, body, device):
             db.execute("DELETE FROM requests WHERE json_extract(response, '$.code')=?", (code,))
         return {'code': code, 'deleted': True}
     session = get_session(db, code)
+    if action == 'reopen':
+        if session['status'] == 'active':
+            return view(db, code, device)
+        if body.get('settled_at') != session['settled_at']:
+            raise UserError('This settlement has changed. Refresh the session and try again.', 409)
+        db.execute('DELETE FROM transfers WHERE session=?', (code,))
+        db.execute("UPDATE sessions SET status='active',settled_at=NULL,minimum_proven=0 WHERE code=?", (code,))
+        audit(db, code, 'Session reopened. Payment plan and paid marks cleared.', 'reopen')
+        return view(db, code, device)
     if action == 'rename':
         player = get_player(db, session, body.get('player_id'), device)
         name = clean_name(body.get('name'))
@@ -390,6 +399,8 @@ def mutate(db, path, body, device):
     if action == 'paid':
         if session['status'] != 'settled':
             raise UserError('Settle the session first.')
+        if body.get('settled_at') != session['settled_at']:
+            raise UserError('This settlement has changed. Refresh the session and try again.', 409)
         transfer = db.execute('SELECT * FROM transfers WHERE id=? AND session=?', (body.get('transfer_id'), code)).fetchone()
         if not transfer:
             raise UserError('That transfer could not be found.')
@@ -579,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
                     if prior['fingerprint'] != fingerprint:
                         raise UserError('This request identifier was already used for another action.', 409)
                     result = json.loads(prior['response'])
+                    if path.endswith('/reopen'):
+                        result = view(db, result['code'], device)
                 else:
                     result = mutate(db, path, body, device)
                     db.execute('INSERT INTO requests VALUES(?,?,?,?)', (device, request_id, fingerprint, json.dumps(result)))

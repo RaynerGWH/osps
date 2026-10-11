@@ -209,6 +209,59 @@ test('deletion ignores a stale confirmation or a non-host',async()=>{
   assert.deepEqual(requests,[]);
 });
 
+test('a guest can reopen and the interface changes only after it is saved',async()=>{
+  const {context,requests,current,closed,messages}=deletionClient();
+  vm.runInContext("state.session={code:'example',status:'settled',role:'guest',settled_at:'first-settlement'};",context);
+  const reopening=context.reopenSession('example','first-settlement');
+  assert.equal(requests[0].path,'/api/sessions/example/reopen');
+  assert.equal(requests[0].body.settled_at,'first-settlement');
+  assert.equal(current().session.status,'settled');
+  requests[0].resolve({code:'example',status:'active',settled_at:null,role:'guest',transfers:[],players:[{name:'A',buyin:10000,cashout:15000}]});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(current().session.status,'active');
+  assert.equal(current().session.players[0].cashout,15000);
+  assert.equal(current().leaderboard,null);
+  assert.equal(closed(),1);
+  assert.deepEqual(messages,['Session reopened.']);
+  requests[1].resolve({sessions:[{code:'example',status:'active'}]});
+  await reopening;
+});
+
+test('failed reopening leaves settlement and paid statuses intact',async()=>{
+  const {context,requests,current,closed}=deletionClient();
+  vm.runInContext("state.session={code:'example',status:'settled',role:'guest',settled_at:'first',transfers:[{id:1,paid:true}]};",context);
+  const reopening=context.reopenSession('example','first');
+  requests[0].reject(new Error('Connection lost'));
+  await assert.rejects(reopening,/Connection lost/);
+  assert.equal(current().session.status,'settled');
+  assert.equal(current().session.transfers[0].paid,true);
+  assert.equal(closed(),0);
+});
+
+test('a payment from a previous settlement cannot change the new payment plan',async()=>{
+  const {context,requests,current}=paymentClient();
+  vm.runInContext("state.session.settled_at='first'",context);
+  const saving=context.setPaymentPaid(1,true);
+  assert.equal(requests[0].body.settled_at,'first');
+  vm.runInContext("state.session.settled_at='second';state.session.transfers[0].paid=false;",context);
+  assert.equal(context.pendingPaymentView(current()).transfers[0].paid,false);
+  requests[0].resolve({status:'settled',settled_at:'first',transfers:[{id:1,paid:true}]});
+  await saving;
+  assert.equal(current().transfers[0].paid,false);
+  assert.equal(current().settled_at,'second');
+});
+
+test('reopen confirmation is available to guests and names the payment reset',()=>{
+  const {context}=deletionClient();let confirmation;
+  context.document.querySelector=()=>({focus(){},querySelector:()=>({focus(){}})});
+  context.modal=(title,body)=>{confirmation={title,body};};
+  vm.runInContext("state.session={code:'example',name:'<Game>',role:'guest',status:'settled',settled_at:'first'};",context);
+  context.reopenSessionModal();
+  assert.match(confirmation.body,/data-action="confirm-reopen-session"/);
+  assert.match(confirmation.body,/&lt;Game&gt;/);
+  assert.match(confirmation.body,/payment plan and paid marks will be reset/);
+});
+
 function rosterClient(role='host'){
   const context=vm.createContext({});
   vm.runInContext(source.slice(0,source.indexOf("document.addEventListener('click'")),context);

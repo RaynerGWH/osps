@@ -78,6 +78,9 @@ class SupabaseTests(unittest.TestCase):
         self.path = '/api/sessions/' + self.code + '/'
 
     def call(self, path, body, device=None, key=None):
+        if path.endswith('/paid') and 'settled_at' not in body:
+            row = self.api.get(path.split('/')[3])
+            body = dict(body, settled_at=row['settled_at'] if row else None)
         self.counter += 1
         key = key or 'request-%016d' % self.counter
         fingerprint = hashlib.sha256((path + json.dumps(body, sort_keys=True)).encode()).hexdigest()
@@ -111,6 +114,31 @@ class SupabaseTests(unittest.TestCase):
             with self.assertRaises(server.UserError) as failure:
                 self.call(self.path + action, body)
             self.assertEqual(failure.exception.status, 404)
+
+    def test_reopen_lost_response_replays_without_reopening_a_new_settlement(self):
+        a, b = self.populated()
+        values = [{'player_id': a, 'amount': '150'}, {'player_id': b, 'amount': '50'}]
+        original = self.call(self.path + 'settle', {'values': values})
+        body = {'settled_at': original['settled_at']}
+        key = 'reopen-request-lost-response'
+        self.api.lose_reply = True
+        with self.assertRaises(CloudError):
+            self.call(self.path + 'reopen', body, 'visitor', key)
+        self.assertEqual(self.store.get(self.code, 'visitor')['status'], 'active')
+        self.call(self.path + 'settle', {'values': values})
+        replayed = self.call(self.path + 'reopen', body, 'visitor', key)
+        self.assertEqual(replayed['status'], 'settled')
+        self.assertNotEqual(replayed['settled_at'], original['settled_at'])
+
+    def test_concurrent_reopen_and_payment_do_not_restore_an_old_plan(self):
+        a, b = self.populated()
+        settled = self.call(self.path + 'settle', {'values': [
+            {'player_id': a, 'amount': '150'}, {'player_id': b, 'amount': '50'}]})
+        self.api.conflict = lambda row: self.call(self.path + 'reopen', {'settled_at': settled['settled_at']}, 'visitor')
+        with self.assertRaises(server.UserError):
+            self.call(self.path + 'paid', {'transfer_id': settled['transfers'][0]['id'], 'paid': True})
+        self.assertEqual(self.store.get(self.code, self.host)['transfers'], [])
+        self.assertEqual(self.store.get(self.code, self.host)['status'], 'active')
 
     def test_delete_retries_after_lost_reply_and_revision_conflict(self):
         self.populated()

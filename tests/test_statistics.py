@@ -38,6 +38,13 @@ class StatisticsTests(unittest.TestCase):
     def call(self, path, body, device=None):
         self.counter += 1
         device = device or self.host
+        if path.endswith('/paid') and 'settled_at' not in body:
+            if self.backend == 'cloud':
+                stamp = self.api.get(path.split('/')[3])['settled_at']
+            else:
+                with server.database() as db:
+                    stamp = server.get_session(db, path.split('/')[3])['settled_at']
+            body = dict(body, settled_at=stamp)
         if self.backend == 'cloud':
             return self.cloud.mutate(path, body, device, 'stats-request-%016d' % self.counter,
                                      hashlib.sha256(json.dumps(body).encode()).hexdigest())
@@ -91,6 +98,43 @@ class StatisticsTests(unittest.TestCase):
                 self.assertEqual(board['total_buyin'], 20000)
                 self.assertEqual([(p['name'], p['net']) for p in board['players']], [('B', 5000), ('A', -5000)])
                 self.assertTrue(all([s['code'] for s in p['history']] == [kept] for p in board['players']))
+
+    def test_any_visitor_can_reopen_and_results_return_only_after_settling_again(self):
+        for self.backend in ('sqlite', 'cloud'):
+            with self.subTest(backend=self.backend):
+                code, settled = self.game(['A', 'B'], ['150', '50'])
+                path = '/api/sessions/' + code + '/'
+                transfer = settled['transfers'][0]
+                self.call(path + 'paid', {'transfer_id': transfer['id'], 'paid': True})
+                before = self.board()
+                reopened = self.call(path + 'reopen', {'settled_at': settled['settled_at']}, 'new-visitor')
+                self.assertEqual(reopened['role'], 'guest')
+                self.assertEqual(reopened['status'], 'active')
+                self.assertIsNone(reopened['settled_at'])
+                self.assertFalse(reopened['minimum_proven'])
+                self.assertEqual(reopened['players'], settled['players'])
+                self.assertEqual(reopened['buyins'], settled['buyins'])
+                self.assertEqual(reopened['transfers'], [])
+                self.assertEqual(self.board()['session_count'], 0)
+                # A duplicate click while active must preserve subsequent edits.
+                self.call(path + 'buyin', {'player_id': settled['players'][0]['id'], 'amount': '20'})
+                duplicate = self.call(path + 'reopen', {'settled_at': settled['settled_at']}, self.friend)
+                self.assertEqual(duplicate['total_buyin'], 22000)
+                self.assertIsNone(duplicate['players'][0]['cashout'])
+                values = [{'player_id': p['id'], 'amount': value} for p, value in
+                          zip(duplicate['players'], ['170', '50', '0'])]
+                final = self.call(path + 'settle', {'values': values})
+                self.assertEqual(final['status'], 'settled')
+                self.assertTrue(all(not t['paid'] for t in final['transfers']))
+                self.assertEqual(self.board()['session_count'], 1)
+                self.assertEqual(self.board()['total_buyin'], 22000)
+                self.assertNotEqual(self.board(), before)
+                for action, body in [('reopen', {'settled_at': settled['settled_at']}),
+                                     ('paid', {'transfer_id': transfer['id'], 'paid': True, 'settled_at': settled['settled_at']})]:
+                    with self.assertRaises(server.UserError) as error:
+                        self.call(path + action, body)
+                    self.assertEqual(error.exception.status, 409)
+                self.assertEqual(self.board()['session_count'], 1)
 
     def test_both_stores_share_all_finished_games_with_every_browser(self):
         for self.backend in ('sqlite', 'cloud'):

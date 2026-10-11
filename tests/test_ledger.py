@@ -113,6 +113,9 @@ class LedgerTests(unittest.TestCase):
         self.temp.cleanup()
 
     def call(self, path, body, device=None):
+        if path.endswith('/paid') and 'settled_at' not in body:
+            with server.database() as db:
+                body = dict(body, settled_at=server.get_session(db, path.split('/')[3])['settled_at'])
         with server.database() as db:
             db.execute('BEGIN IMMEDIATE')
             return server.mutate(db, path, body, device or self.host)
@@ -346,6 +349,28 @@ class HttpTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.post('/api/sessions', {'name': 'No'}, origin='https://other.example')
         self.assertEqual(error.exception.code, 403)
+
+    def test_guest_can_reopen_and_http_retry_returns_current_session(self):
+        code = self.post('/api/sessions', {'name': 'Reopen test'})['code']
+        path = '/api/sessions/' + code + '/'
+        self.post(path + 'players', {'name': 'A', 'amount': '100'})
+        state = self.post(path + 'players', {'name': 'B', 'amount': '100'})
+        values = [{'player_id': p['id'], 'amount': amount}
+                  for p, amount in zip(state['players'], ['150', '50'])]
+        settled = self.post(path + 'settle', {'values': values})
+        visitor = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        visitor.open(self.url + '/api/sessions').read()
+        req = urllib.request.Request(self.url + path + 'reopen',
+              json.dumps({'settled_at': settled['settled_at']}).encode(),
+              {'Content-Type': 'application/json', 'X-Request-Id': secrets.token_hex(16)})
+        reopened = json.load(visitor.open(req))
+        self.assertEqual(reopened['status'], 'active')
+        self.assertEqual(reopened['role'], 'guest')
+        self.assertEqual(reopened['players'], settled['players'])
+        final = self.post(path + 'settle', {'values': values})
+        replayed = json.load(visitor.open(req))
+        self.assertEqual(replayed['status'], 'settled')
+        self.assertEqual(replayed['settled_at'], final['settled_at'])
 
     def test_fresh_browser_discovers_sessions_and_sees_updates_without_edit_access(self):
         code = self.post('/api/sessions', {'name': 'Shared game'})['code']

@@ -14,8 +14,7 @@ from test_supabase import MemoryAPI
 class StatisticsAPI(MemoryAPI):
     def stats_rows(self, device, offset=0, limit=200):
         rows = [row for row in self.rows.values()
-                if row['status'] == 'settled' and
-                (row['owner_hash'] == device or device in row['member_hashes'])]
+                if row['status'] == 'settled']
         rows.sort(key=lambda row: (row['created_at'], row['session_code']), reverse=True)
         # A smaller service-side limit must not truncate lifetime statistics.
         return copy.deepcopy(rows[offset:offset + min(limit, 2)])
@@ -93,20 +92,20 @@ class StatisticsTests(unittest.TestCase):
                 self.assertEqual([(p['name'], p['net']) for p in board['players']], [('B', 5000), ('A', -5000)])
                 self.assertTrue(all([s['code'] for s in p['history']] == [kept] for p in board['players']))
 
-    def test_both_stores_aggregate_only_accessible_finished_games(self):
+    def test_both_stores_share_all_finished_games_with_every_browser(self):
         for self.backend in ('sqlite', 'cloud'):
             with self.subTest(backend=self.backend):
                 self.game(['Arden', 'Rayner'], ['175', '75'], rebuy=True)
                 self.game(['arden', 'RAYNER'], ['100', '100'])
                 code, latest = self.game(['ARDEN', 'rayner'], ['70', '130'], self.friend, joined=True)
                 self.game(['Arden', 'Rayner'], None)
-                self.game(['Secret', 'Private'], ['200', '0'], 'private-owner')
+                self.game(['Chris', 'Dana'], ['200', '0'], 'another-owner')
                 self.game(['Sample', 'Demo'], ['200', '0'], sample=True)
                 board = self.board()
-                self.assertEqual(board['session_count'], 3)
-                self.assertEqual(board['total_buyin'], 65000)
-                self.assertEqual([p['name'] for p in board['players']], ['Rayner', 'Arden'])
-                rayner, arden = board['players']
+                self.assertEqual(board['session_count'], 4)
+                self.assertEqual(board['total_buyin'], 85000)
+                self.assertEqual([p['name'] for p in board['players']], ['Chris', 'Rayner', 'Arden', 'Dana'])
+                rayner, arden = board['players'][1:3]
                 self.assertEqual(sum(p['net'] for p in board['players']), 0)
                 self.assertEqual((arden['sessions'], arden['wins'], arden['losses'], arden['draws']), (3, 1, 1, 1))
                 self.assertEqual((arden['buyin'], arden['cashout'], arden['net'], arden['best'], arden['worst']),
@@ -114,9 +113,9 @@ class StatisticsTests(unittest.TestCase):
                 self.assertEqual((rayner['net'], rayner['best'], rayner['worst']), (500, 3000, -2500))
                 self.assertEqual(len(arden['history']), 3)
                 self.assertEqual(arden['history'][0]['code'], code)
-                self.assertEqual(self.board('outsider'), {'players': [], 'session_count': 0, 'total_buyin': 0})
+                self.assertEqual(self.board('outsider'), board)
                 text = json.dumps(board)
-                for private in ('host-stats', 'friend-stats', 'device_hash', '_ledger', 'Spectator', 'Secret', 'Demo'):
+                for private in ('host-stats', 'friend-stats', 'device_hash', '_ledger', 'Spectator', 'another-owner', 'Demo'):
                     self.assertNotIn(private, text)
                 transfer = latest['transfers'][0]
                 self.call('/api/sessions/' + code + '/paid', {'transfer_id': transfer['id'], 'paid': True}, self.friend)
@@ -124,7 +123,7 @@ class StatisticsTests(unittest.TestCase):
                 self.call('/api/sessions/' + code + '/rename',
                           {'player_id': latest['players'][0]['id'], 'name': 'Arden corrected'}, self.friend)
                 names = {p['name']: p['sessions'] for p in self.board()['players']}
-                self.assertEqual(names, {'Rayner': 3, 'Arden': 2, 'Arden corrected': 1})
+                self.assertEqual(names, {'Rayner': 3, 'Arden': 2, 'Arden corrected': 1, 'Chris': 1, 'Dana': 1})
 
     def test_ties_and_cent_values(self):
         result = server.player_statistics([{'code': 'game', 'name': 'Game', 'created': server.now(),
@@ -151,7 +150,7 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(board['players'][0]['net'], 5025000)
         self.assertEqual(len(board['players'][0]['history']), 1005)
 
-    def test_cloud_query_filters_access_and_requests_only_statistics_fields(self):
+    def test_cloud_query_reads_shared_settled_statistics(self):
         api = SupabaseAPI('https://example.com', 'sb_secret_test')
         with patch.object(api, 'request', return_value=[]) as request:
             api.stats_rows(self.host, 1000)
@@ -160,7 +159,6 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(params['offset'], '1000')
         self.assertEqual(params['limit'], '200')
         self.assertEqual(params['order'], 'created_at.desc,session_code.desc')
-        self.assertIn('owner_hash.eq.' + self.host, params['or'])
-        self.assertIn('member_hashes.cs.{%s}' % self.host, params['or'])
+        self.assertNotIn('or', params)
         self.assertNotIn('transfers', params['select'])
         self.assertNotIn('*', params['select'])

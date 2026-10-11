@@ -24,7 +24,7 @@ class MemoryAPI:
         return copy.deepcopy(self.rows.get(code))
 
     def list(self, device, offset=0, limit=51):
-        rows = [row for row in self.rows.values() if row['owner_hash'] == device or device in row['member_hashes']]
+        rows = list(self.rows.values())
         rows.sort(key=lambda row: (row['created_at'], row['session_code']), reverse=True)
         return copy.deepcopy(rows[offset:offset + limit])
 
@@ -106,7 +106,7 @@ class SupabaseTests(unittest.TestCase):
         self.assertEqual(self.call(self.path + 'delete', {}), {'code': self.code, 'deleted': True})
         self.assertIsNone(self.api.get(self.code))
         self.assertEqual([s['code'] for s in self.store.listing(self.host)['sessions']], [other])
-        self.assertEqual(self.store.listing(self.friend)['sessions'], [])
+        self.assertEqual(self.store.listing(self.friend), self.store.listing(self.host))
         for action, body in [('players', {'name': 'Late player'}), ('paid', {'transfer_id': 1, 'paid': True})]:
             with self.assertRaises(server.UserError) as failure:
                 self.call(self.path + action, body)
@@ -150,7 +150,7 @@ class SupabaseTests(unittest.TestCase):
         self.assertEqual(failure.exception.status, 409)
         self.assertIsNotNone(self.api.get(self.code))
 
-    def test_history_beyond_1000_sessions_keeps_every_game_and_access_scope(self):
+    def test_public_history_beyond_1000_sessions_keeps_every_game(self):
         self.call(self.path + 'players', {'name': 'Old regular', 'amount': '100'})
         original = self.store.get(self.code, self.host)
         with patch.object(server, 'now', return_value='2026-10-11T01:00:00+00:00'):
@@ -158,48 +158,47 @@ class SupabaseTests(unittest.TestCase):
                 self.call('/api/sessions', {'name': 'Game %d' % i})
             member_code = self.call('/api/sessions', {'name': 'Joined game'}, self.friend)['code']
             self.call('/api/sessions/' + member_code + '/join', {'name': 'Host as player'}, self.host)
-            self.call('/api/sessions', {'name': 'Private game'}, self.friend)
+            self.call('/api/sessions', {'name': 'Another host game'}, self.friend)
         codes, offset = [], 0
         while offset is not None:
             page = self.store.listing(self.host, offset)
             self.assertLessEqual(len(page['sessions']), 50)
             codes.extend(s['code'] for s in page['sessions'])
             offset = page['next_offset']
-        self.assertEqual(len(codes), 1007)
-        self.assertEqual(len(set(codes)), 1007)
+        self.assertEqual(len(codes), 1008)
+        self.assertEqual(len(set(codes)), 1008)
         self.assertIn(member_code, codes)
         self.assertEqual(self.store.get(self.code, self.host), original)
-        self.assertEqual(self.store.listing('outsider')['sessions'], [])
+        self.assertEqual(self.store.listing('outsider'), self.store.listing(self.host))
         self.assertIn('Old regular', self.store.saved_players(self.host)['players'])
 
-    def test_saved_players_persist_across_sessions_and_exclude_private_and_demo_names(self):
+    def test_saved_players_are_shared_across_browsers_and_exclude_demo_names(self):
         self.call(self.path + 'players', {'name': 'Zoe', 'amount': '100'})
         self.call(self.path + 'players', {'name': 'rayner', 'amount': '50'})
         sample = self.call('/api/sessions', {'name': 'Sample'})['code']
         self.call('/api/sessions/' + sample + '/players', {'name': 'Sarah'})
         metadata(self.api.rows[sample])['demo'] = True
-        private = self.call('/api/sessions', {'name': 'Private'}, self.friend)['code']
-        self.call('/api/sessions/' + private + '/players', {'name': 'Private person'}, self.friend)
+        other = self.call('/api/sessions', {'name': 'Other host'}, self.friend)['code']
+        self.call('/api/sessions/' + other + '/players', {'name': 'Casey'}, self.friend)
         joined = self.call('/api/sessions', {'name': 'Joined'}, self.friend)['code']
         self.call('/api/sessions/' + joined + '/players', {'name': 'Amy'}, self.friend)
         self.call('/api/sessions/' + joined + '/join', {'name': 'Host'}, self.host)
         fresh = self.call('/api/sessions', {'name': 'Next session'})['code']
         self.store = SupabaseStore(self.api, server)
         names = self.store.saved_players(self.host)['players']
-        self.assertEqual(names, sorted(set(server.STARTER_PLAYERS) | {'Zoe', 'Amy', 'Host'}, key=str.casefold))
-        self.assertEqual(self.store.saved_players('outsider')['players'], list(server.STARTER_PLAYERS))
+        self.assertEqual(names, sorted(set(server.STARTER_PLAYERS) | {'Zoe', 'Amy', 'Host', 'Casey'}, key=str.casefold))
+        self.assertEqual(self.store.saved_players('outsider')['players'], names)
         self.assertEqual(self.store.get(fresh, self.host)['players'], [])
         self.assertEqual(self.store.get(fresh, self.host)['total_buyin'], 0)
 
-    def test_cloud_roster_reads_only_accessible_sessions_and_player_data(self):
+    def test_cloud_roster_reads_shared_player_data(self):
         api = SupabaseAPI('https://example.com', 'sb_secret_test')
         with patch.object(api, 'request', return_value=[]) as request:
             api.roster_rows(self.host, 1000)
         params = request.call_args.kwargs['params']
         self.assertEqual(params['offset'], '1000')
         self.assertEqual(params['select'], 'players')
-        self.assertIn('owner_hash.eq.' + self.host, params['or'])
-        self.assertIn('member_hashes.cs.{%s}' % self.host, params['or'])
+        self.assertNotIn('or', params)
 
     def test_cloud_history_requests_a_bounded_page_with_stable_order(self):
         api = SupabaseAPI('https://example.com', 'sb_secret_test')
@@ -209,7 +208,7 @@ class SupabaseTests(unittest.TestCase):
         self.assertEqual(params['offset'], '1000')
         self.assertEqual(params['limit'], '51')
         self.assertEqual(params['order'], 'created_at.desc,session_code.desc')
-        self.assertIn('owner_hash.eq.' + self.host, params['or'])
+        self.assertNotIn('or', params)
         self.assertNotIn('*', params['select'])
 
     def test_receipt_survives_new_store_instance(self):
@@ -341,7 +340,7 @@ class SupabaseTests(unittest.TestCase):
         serialized = json.dumps(guest)
         for secret in (self.host, self.friend, '_ledger', 'device_hash', 'requests'):
             self.assertNotIn(secret, serialized)
-        self.assertEqual(self.store.listing('guest')['sessions'], [])
+        self.assertEqual(self.store.listing('guest'), self.store.listing(self.host))
         self.assertEqual(len(self.store.listing(self.friend)['sessions']), 1)
 
     def test_rebuy_removal_and_zero_cashout(self):

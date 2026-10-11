@@ -45,7 +45,7 @@ function toast(text){$('#toast').textContent=text;$('#toast').classList.add('sho
 function editable(p){return state.session.role==='host'||p.id===state.session.my_player_id;}
 function ordered(){return [...state.session.players].sort((a,b)=>state.session.status==='settled'?(b.cashout-b.buyin)-(a.cashout-a.buyin)||a.id-b.id:a.id-b.id);}
 function currentSessionCode(){
-  return state.currentCode||state.sessions.find(s=>s.status==='active')?.code||state.sessions[0]?.code||state.session?.code;
+  return state.sessions.find(s=>s.status==='active')?.code||state.sessions[0]?.code||state.session?.code;
 }
 function renderNavigation(){
   const board=state.view==='leaderboard',current=!board&&Boolean(state.session)&&state.session.code===currentSessionCode();
@@ -337,10 +337,11 @@ document.addEventListener('click',async event=>{
     if(action==='leaderboard')return openLeaderboard();
     if(action==='player-stats')return playerStatsModal(el.dataset.key);
     if(action==='current'){
+      state.busy=true;await refreshSessions();
       const code=currentSessionCode();
       if(!code)return newSession();
       if(state.view==='session'&&code===state.session?.code){window.scrollTo(0,0);return;}
-      state.busy=true;await openSession(code);return;
+      await openSession(code);return;
     }
     if(action==='older-sessions')return await loadSessionHistory(Number(el.dataset.offset));
     if(action==='open-session'){state.busy=true;await openSession(el.dataset.code);$('#modal').close();return;}
@@ -412,18 +413,39 @@ $('#modal').addEventListener('click',event=>{
 });
 $('#modal').addEventListener('cancel',event=>{if(state.busy)event.preventDefault();});
 async function poll(){
-  if(state.view==='leaderboard'||!state.session||state.busy||state.paymentSaves.size||state.polling||$('#modal').open||document.hidden||document.activeElement?.tagName==='SELECT')return;
-  state.polling=true;const code=state.session.code,writeVersion=state.writeVersion;
-  try{const fresh=await api('/api/sessions/'+code);if(state.view==='leaderboard'||state.session?.code!==code||state.busy||state.writeVersion!==writeVersion)return;if(JSON.stringify(fresh)!==JSON.stringify(state.session)){state.session=fresh;render();}else if($('#connection'))$('#connection').textContent='';}
+  if(state.busy||state.paymentSaves.size||state.polling||$('#modal').open||document.hidden||document.activeElement?.tagName==='SELECT')return;
+  state.polling=true;const code=state.session?.code,writeVersion=state.writeVersion,view=state.view,request=state.leaderboardRequest;
+  const stillHere=()=>state.view===view&&state.session?.code===code&&state.leaderboardRequest===request&&!state.busy&&state.writeVersion===writeVersion&&!$('#modal').open;
+  try{
+    if(view==='leaderboard'){
+      const fresh=await api('/api/leaderboard');if(!stillHere())return;
+      if(JSON.stringify(fresh)!==JSON.stringify(state.leaderboard)||state.leaderboardError){
+        const search=document.activeElement?.id==='leaderboard-search';
+        const selection=search?[document.activeElement.selectionStart,document.activeElement.selectionEnd]:null;
+        state.leaderboard=fresh;state.leaderboardError='';render();
+        if(search){const input=$('#leaderboard-search');input?.focus({preventScroll:true});if(input&&selection)input.setSelectionRange(...selection);}
+      }
+    }else if(!code){
+      const page=await api('/api/sessions');if(!stillHere())return;
+      state.sessions=page.sessions;
+      const current=currentSessionCode();
+      if(current){const fresh=await api('/api/sessions/'+encodeURIComponent(current));if(!stillHere())return;state.session=pendingPaymentView(fresh);const url=new URL(location.href);url.searchParams.set('session',current);history.replaceState({},'',url);render();}
+    }else{
+      const fresh=await api('/api/sessions/'+code);if(!stillHere())return;
+      if(JSON.stringify(fresh)!==JSON.stringify(state.session)){state.session=fresh;render();}
+      else if($('#connection'))$('#connection').textContent='';
+    }
+  }
   catch(err){
-    if(state.view==='leaderboard'||state.session?.code!==code||state.busy||state.writeVersion!==writeVersion)return;
-    if(err.status===404){forgetSession(code);render();toast('This session is no longer available.');}
+    if(!stillHere())return;
+    if(view==='leaderboard'){state.leaderboardError=err.message;render();}
+    else if(err.status===404&&code){forgetSession(code);render();toast('This session is no longer available.');}
     else if($('#connection')){$('#connection').className='connection';$('#connection').textContent='Offline. Reconnecting...';}
   }
   finally{state.polling=false;}
 }
 async function start(){
-  try{await refreshSessions();const params=new URL(location.href).searchParams,code=params.get('session');if(params.get('view')==='leaderboard'){if(code){try{state.session=pendingPaymentView(await api('/api/sessions/'+encodeURIComponent(code)));}catch(err){if(err.status!==404)throw err;forgetSession(code);}}return await openLeaderboard();}if(code)return await openSession(code);if(state.sessions.length)return await openSession(state.sessions[0].code);render();}
+  try{await refreshSessions();const params=new URL(location.href).searchParams,code=params.get('session');if(params.get('view')==='leaderboard'){if(code){try{state.session=pendingPaymentView(await api('/api/sessions/'+encodeURIComponent(code)));}catch(err){if(err.status!==404)throw err;forgetSession(code);}}return await openLeaderboard();}if(code)return await openSession(code);const current=currentSessionCode();if(current)return await openSession(current);render();}
   catch(err){renderNavigation();$('#app').innerHTML=`<p class="error">${esc(err.message)}</p><button class="button primary" data-action="new">New session</button>`;}
 }
 start();setInterval(poll,3000);

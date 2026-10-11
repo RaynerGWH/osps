@@ -303,3 +303,73 @@ test('leaderboard ignores late responses after leaving and recovers after an err
   assert.equal(vm.runInContext('state.leaderboardError',context),'');
   assert.equal(vm.runInContext('state.leaderboard.session_count',context),0);
 });
+
+function pollingClient(){
+  const requests=[],renders=[],urls=[];
+  const dialog={open:false},connection={textContent:''};
+  const context=vm.createContext({URL,location:{href:'https://example.com/'},
+    history:{replaceState:(_,__,url)=>urls.push(String(url))},
+    document:{hidden:false,activeElement:null,querySelector:selector=>selector==='#modal'?dialog:selector==='#connection'?connection:null}});
+  vm.runInContext(source.slice(0,source.indexOf("document.addEventListener('click'")),context);
+  vm.runInContext(source.slice(source.indexOf('async function poll(){'),source.indexOf('start();setInterval')),context);
+  context.api=(path,body)=>new Promise((resolve,reject)=>requests.push({path,body,resolve,reject}));
+  context.render=()=>renders.push(JSON.parse(vm.runInContext('JSON.stringify(state)',context)));
+  context.toast=()=>{};
+  const current=()=>JSON.parse(vm.runInContext('JSON.stringify(state)',context));
+  return {context,requests,renders,urls,dialog,current};
+}
+
+test('current session uses shared history rather than the browsers last opened game',()=>{
+  const {context}=pollingClient();
+  vm.runInContext(`state.currentCode='old';state.session={code:'old'};state.sessions=[
+    {code:'settled',status:'settled'},{code:'new',status:'active'},{code:'old',status:'active'}];`,context);
+  assert.equal(context.currentSessionCode(),'new');
+  vm.runInContext('state.sessions.forEach(s=>s.status="settled")',context);
+  assert.equal(context.currentSessionCode(),'settled');
+});
+
+test('an empty visitor page picks up another browsers new session without creating one',async()=>{
+  const {context,requests,current,urls}=pollingClient();
+  const polling=context.poll();
+  assert.equal(requests[0].path,'/api/sessions');
+  requests[0].resolve({sessions:[{code:'shared',status:'active'}]});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(requests[1].path,'/api/sessions/shared');
+  requests[1].resolve({code:'shared',role:'guest',status:'active',players:[],transfers:[]});
+  await polling;
+  assert.equal(current().session.code,'shared');
+  assert.equal(current().session.role,'guest');
+  assert.ok(requests.every(request=>request.body===undefined));
+  assert.deepEqual(urls,['https://example.com/?session=shared']);
+});
+
+test('leaderboard refreshes automatically and ignores results after leaving',async()=>{
+  const {context,requests,current,renders}=pollingClient();
+  vm.runInContext("state.view='leaderboard';state.leaderboardQuery='Ray';state.leaderboard={players:[],session_count:0};",context);
+  const polling=context.poll();
+  assert.equal(requests[0].path,'/api/leaderboard');
+  requests[0].resolve({players:[{name:'Rayner',net:100}],session_count:1});
+  await polling;
+  assert.equal(current().leaderboard.session_count,1);
+  assert.equal(current().leaderboardQuery,'Ray');
+  assert.equal(renders.length,1);
+  const leaving=context.poll();
+  vm.runInContext("state.view='session';state.leaderboardRequest++;",context);
+  requests[1].resolve({players:[],session_count:9});
+  await leaving;
+  assert.equal(current().leaderboard.session_count,1);
+  assert.equal(renders.length,1);
+});
+
+test('live refresh does not interrupt an open form or replace a pending payment',async()=>{
+  const {context,requests,dialog,current}=pollingClient();
+  vm.runInContext("state.session={code:'shared',total_buyin:10000};",context);
+  dialog.open=true;
+  await context.poll();assert.equal(requests.length,0);
+  dialog.open=false;
+  const polling=context.poll();
+  vm.runInContext('state.writeVersion++',context);
+  requests[0].resolve({code:'shared',total_buyin:20000});
+  await polling;
+  assert.equal(current().session.total_buyin,10000);
+});

@@ -151,7 +151,7 @@ class LedgerTests(unittest.TestCase):
             for table in ('players', 'buyins', 'transfers', 'activity', 'requests'):
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], 0)
             self.assertEqual([s['code'] for s in server.listing(db, self.host)['sessions']], [other])
-            self.assertEqual(server.listing(db, self.friend)['sessions'], [])
+            self.assertEqual(server.listing(db, self.friend), server.listing(db, self.host))
         with self.assertRaises(server.UserError) as failure:
             self.get()
         self.assertEqual(failure.exception.status, 404)
@@ -165,8 +165,8 @@ class LedgerTests(unittest.TestCase):
         self.call(self.path + 'players', {'name': 'Zoe', 'amount': '100'})
         self.call(self.path + 'players', {'name': 'rayner', 'amount': '50'})
         self.call('/api/demo', {})
-        private = self.call('/api/sessions', {'name': 'Private'}, self.friend)['code']
-        self.call('/api/sessions/' + private + '/players', {'name': 'Private person'}, self.friend)
+        other = self.call('/api/sessions', {'name': 'Other host'}, self.friend)['code']
+        self.call('/api/sessions/' + other + '/players', {'name': 'Casey'}, self.friend)
         joined = self.call('/api/sessions', {'name': 'Joined'}, self.friend)['code']
         self.call('/api/sessions/' + joined + '/players', {'name': 'Amy'}, self.friend)
         self.call('/api/sessions/' + joined + '/join', {'name': 'Host'}, self.host)
@@ -175,10 +175,10 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(self.get(fresh)['total_buyin'], 0)
         with server.database() as db:
             names = server.saved_players(db, self.host)['players']
-            self.assertEqual(names, sorted(set(server.STARTER_PLAYERS) | {'Zoe', 'Amy', 'Host'}, key=str.casefold))
+            self.assertEqual(names, sorted(set(server.STARTER_PLAYERS) | {'Zoe', 'Amy', 'Host', 'Casey'}, key=str.casefold))
             self.assertNotIn('Sarah', names)
-            self.assertNotIn('Private person', names)
-            self.assertEqual(server.saved_players(db, 'outsider')['players'], list(server.STARTER_PLAYERS))
+            self.assertIn('Casey', names)
+            self.assertEqual(server.saved_players(db, 'outsider')['players'], names)
 
     def test_history_has_no_lifetime_cap_and_pages_without_duplicates(self):
         a, b = self.populated()
@@ -187,7 +187,7 @@ class LedgerTests(unittest.TestCase):
         with server.database() as db:
             for i in range(205):
                 server.mutate(db, '/api/sessions', {'name': 'Game %d' % i}, self.host)
-            other = server.mutate(db, '/api/sessions', {'name': 'Private'}, self.friend)['code']
+            other = server.mutate(db, '/api/sessions', {'name': 'Other host'}, self.friend)['code']
         codes, offset = [], 0
         with server.database() as db:
             while offset is not None:
@@ -197,10 +197,10 @@ class LedgerTests(unittest.TestCase):
                 offset = page['next_offset']
             original = next(s for s in page['sessions'] if s['code'] == self.code)
             self.assertEqual(original['total_buyin'], 20000)
-            self.assertEqual(server.listing(db, 'outsider')['sessions'], [])
-        self.assertEqual(len(codes), 206)
-        self.assertEqual(len(set(codes)), 206)
-        self.assertNotIn(other, codes)
+            self.assertEqual(server.listing(db, 'outsider'), server.listing(db, self.host))
+        self.assertEqual(len(codes), 207)
+        self.assertEqual(len(set(codes)), 207)
+        self.assertIn(other, codes)
         self.assertEqual(self.get()['buyins'][0], dict(entry, voided=1))
 
     def test_rebuy_and_removal_keep_audit(self):
@@ -347,7 +347,29 @@ class HttpTests(unittest.TestCase):
             self.post('/api/sessions', {'name': 'No'}, origin='https://other.example')
         self.assertEqual(error.exception.code, 403)
 
-    def test_leaderboard_api_uses_requesting_browser_and_settled_results(self):
+    def test_fresh_browser_discovers_sessions_and_sees_updates_without_edit_access(self):
+        code = self.post('/api/sessions', {'name': 'Shared game'})['code']
+        path = '/api/sessions/' + code
+        first = self.post(path + '/players', {'name': 'A', 'amount': '100'})
+        visitor = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        page = json.load(visitor.open(self.url + '/api/sessions'))
+        self.assertIn(code, [s['code'] for s in page['sessions']])
+        current = json.load(visitor.open(self.url + path))
+        self.assertEqual(current['role'], 'guest')
+        self.assertEqual(current['total_buyin'], 10000)
+        self.post(path + '/buyin', {'player_id': first['players'][0]['id'], 'amount': '25'})
+        updated = json.load(visitor.open(self.url + path))
+        self.assertEqual(updated['total_buyin'], 12500)
+        for action, body in [('players', {'name': 'Not authorised'}), ('delete', {}), ('settle', {})]:
+            req = urllib.request.Request(self.url + path + '/' + action, json.dumps(body).encode(),
+                  {'Content-Type': 'application/json', 'X-Request-Id': secrets.token_hex(16)})
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                visitor.open(req)
+            self.assertEqual(error.exception.code, 403)
+        for secret in ('owner', 'device_hash', 'member_hashes', '_ledger'):
+            self.assertNotIn('"' + secret + '"', json.dumps([page, updated]))
+
+    def test_leaderboard_api_shares_settled_results_without_a_cookie(self):
         code = self.post('/api/sessions', {'name': 'Stats game'})['code']
         path = '/api/sessions/' + code + '/'
         self.post(path + 'players', {'name': 'A', 'amount': '100'})
@@ -358,7 +380,7 @@ class HttpTests(unittest.TestCase):
             for p, amount in zip(state['players'], ['150', '50'])]})
         board = json.load(self.client.open(self.url + '/api/leaderboard'))
         self.assertEqual([p['net'] for p in board['players']], [5000, -5000])
-        self.assertEqual(json.load(urllib.request.urlopen(self.url + '/api/leaderboard'))['players'], [])
+        self.assertEqual(json.load(urllib.request.urlopen(self.url + '/api/leaderboard')), board)
     def test_history_page_validation_and_totals(self):
         code = self.post('/api/sessions', {'name': 'Saved game'})['code']
         self.post('/api/sessions/' + code + '/players', {'name': 'A', 'amount': '100'})
@@ -371,12 +393,12 @@ class HttpTests(unittest.TestCase):
                 self.client.open(self.url + '/api/sessions?offset=' + offset)
             self.assertEqual(error.exception.code, 400)
 
-    def test_saved_player_api_uses_requesting_browser(self):
+    def test_saved_player_api_shares_names_without_a_cookie(self):
         code = self.post('/api/sessions', {'name': 'Names'})['code']
         self.post('/api/sessions/' + code + '/players', {'name': 'Zoe', 'amount': '100'})
         response = json.load(self.client.open(self.url + '/api/players'))
         self.assertEqual(response['players'], sorted([*server.STARTER_PLAYERS, 'Zoe'], key=str.casefold))
-        self.assertEqual(json.load(urllib.request.urlopen(self.url + '/api/players'))['players'], list(server.STARTER_PLAYERS))
+        self.assertEqual(json.load(urllib.request.urlopen(self.url + '/api/players')), response)
 
 
 if __name__ == '__main__':

@@ -206,14 +206,15 @@ def player_rows(db, code):
 
 
 def listing(db, device, offset=0):
+    # One shared ledger for everyone who opens the site. Device identity is
+    # still checked separately for edits, settlement and deletion.
     rows = [dict(r) for r in db.execute('''SELECT s.code,s.name,s.created,s.status,s.demo,
       COALESCE((SELECT SUM(b.amount) FROM buyins b JOIN players p ON b.player=p.id
         WHERE p.session=s.code AND b.voided=0),0) AS total_buyin,
       (SELECT COUNT(*) FROM transfers t WHERE t.session=s.code AND t.paid=0) AS unpaid_count
-      FROM sessions s WHERE s.owner=? OR EXISTS
-        (SELECT 1 FROM players p WHERE p.session=s.code AND p.device=?)
+      FROM sessions s
       ORDER BY s.created DESC,s.code DESC LIMIT ? OFFSET ?''',
-      (device, device, HISTORY_PAGE_SIZE + 1, offset))]
+      (HISTORY_PAGE_SIZE + 1, offset))]
     return {'sessions': rows[:HISTORY_PAGE_SIZE],
             'next_offset': offset + HISTORY_PAGE_SIZE if len(rows) > HISTORY_PAGE_SIZE else None}
 
@@ -229,9 +230,8 @@ def player_directory(names):
 
 def saved_players(db, device):
     rows = db.execute('''SELECT p.name FROM players p JOIN sessions s ON s.code=p.session
-      WHERE s.demo=0 AND (s.owner=? OR EXISTS
-        (SELECT 1 FROM players member WHERE member.session=s.code AND member.device=?))
-      ORDER BY s.created DESC,s.code DESC,p.id''', (device, device))
+      WHERE s.demo=0
+      ORDER BY s.created DESC,s.code DESC,p.id''')
     return player_directory(row['name'] for row in rows)
 
 
@@ -279,9 +279,8 @@ def leaderboard(db, device):
     rows = db.execute('''SELECT s.code,s.name AS session_name,s.created,p.name,p.cashout,
       COALESCE(SUM(CASE WHEN b.voided=0 THEN b.amount ELSE 0 END),0) AS buyin
       FROM sessions s JOIN players p ON p.session=s.code LEFT JOIN buyins b ON b.player=p.id
-      WHERE s.status='settled' AND s.demo=0 AND (s.owner=? OR EXISTS
-        (SELECT 1 FROM players member WHERE member.session=s.code AND member.device=?))
-      GROUP BY s.code,p.id ORDER BY s.created DESC,s.code DESC,p.id''', (device, device))
+      WHERE s.status='settled' AND s.demo=0
+      GROUP BY s.code,p.id ORDER BY s.created DESC,s.code DESC,p.id''')
     sessions = {}
     for row in rows:
         session = sessions.setdefault(row['code'], {'code': row['code'], 'name': row['session_name'],

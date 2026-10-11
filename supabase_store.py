@@ -83,13 +83,13 @@ class SupabaseAPI:
         return rows[0] if rows else None
 
     def list(self, device, offset=0, limit=51):
-        return self.request(params={'or': '(owner_hash.eq.%s,member_hashes.cs.{%s})' % (device, device), 'select': 'session_code,name,created_at,status,total_buy_in_cents,transfers', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
+        return self.request(params={'select': 'session_code,name,created_at,status,total_buy_in_cents,transfers', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
 
     def roster_rows(self, device, offset=0, limit=200):
-        return self.request(params={'or': '(owner_hash.eq.%s,member_hashes.cs.{%s})' % (device, device), 'select': 'players', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
+        return self.request(params={'select': 'players', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
 
     def stats_rows(self, device, offset=0, limit=200):
-        return self.request(params={'or': '(owner_hash.eq.%s,member_hashes.cs.{%s})' % (device, device), 'status': 'eq.settled', 'select': 'session_code,name,created_at,status,players,buy_ins', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
+        return self.request(params={'status': 'eq.settled', 'select': 'session_code,name,created_at,status,players,buy_ins', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
 
     def insert(self, row):
         return self.request('POST', body=row, prefer='return=representation')[0]

@@ -26,6 +26,8 @@ To correct a typo, open the player's name and tap the pencil beside their name. 
 
 **Session history** lists saved games with their date, status, and total buy-ins. Open any game to see its full ledger and settlement. Older games load in pages, with no lifetime session limit or automatic expiry. Starting a new session leaves all earlier sessions intact. Records remain in the configured database; they do not depend on keeping the app open.
 
+To delete a game, open it and choose **Session options (⋯) > Delete session**. Only the browser that created the session has this option. Confirmation permanently removes that session, including its buy-ins, payments, history, and leaderboard results. This works for both active and settled games. Other sessions remain unchanged. Deleting the last session leaves an empty list until you start another one. Database backups and any earlier local exports are separate copies.
+
 **Leaderboard** ranks players by total net result across all non-sample, settled sessions hosted or joined by the current browser. It includes sessions played, profitable sessions (wins), win rate, total buy-ins, and net profit or loss. Equal net results share a rank. Tap a player for their average, best and worst results, cash outs, losses, break-even sessions, and individual session history. Open any listed session to see its ledger. On smaller screens, the table keeps rank, player, sessions, and net result visible; the full stats are in the player detail.
 
 Names are matched after trimming whitespace and ignoring capitalisation. Two different people with the same name will be combined; use distinct names for them. A renamed entry is grouped under its corrected name, while other sessions keep their recorded names. Active games, sample games, removed buy-ins, and players with no money recorded are excluded. Payment checkboxes do not change poker results. Statistics are recalculated from saved history whenever the Leaderboard tab opens, with no new table or migration needed.
@@ -48,6 +50,8 @@ The host can enter all amounts. Players can join through a session URL and manag
 The server loads `.env` at startup. When `SUPABASE_URL` and `SUPABASE_SECRET_KEY` are set, Supabase is the source of truth for every session, buy-in, cash-out, and transfer. The browser keeps an opaque session-access cookie; it does not store the ledger. The server keeps the secret key out of browser responses and access logs.
 
 `supabase/create_poker_sessions.sql` is the additive migration for one Supabase table. Set `target_schema` to the existing schema before first use. It adds `poker_sessions` and two indexes without modifying unrelated tables. A name collision fails the transaction instead of altering an existing table. Once the table exists, do not rerun the creation script.
+
+Session deletion requires the backend's `service_role` to have DELETE permission. The existing hosted project already has it. For another installation that denies deletion, `supabase/allow_session_deletion.sql` grants only that permission on the configured table; it does not remove data.
 
 Fill in the project-root `.env` file locally:
 

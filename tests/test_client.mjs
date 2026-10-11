@@ -139,6 +139,76 @@ test('reopening a session while saving preserves the immediate payment status',a
   assert.equal(vm.runInContext('state.paymentSaves.size',context),0);
 });
 
+test('a late payment response cannot restore a deleted session',async()=>{
+  const {context,requests,current}=paymentClient();
+  const saving=context.setPaymentPaid(1,true);
+  vm.runInContext('state.session=null',context);
+  requests[0].resolve({transfers:[{id:1,paid:true}]});
+  await saving;
+  assert.equal(current(),null);
+  assert.equal(vm.runInContext('state.paymentSaves.size',context),0);
+});
+
+function deletionClient(){
+  const requests=[],urls=[],messages=[];
+  let closed=0;
+  const context=vm.createContext({URL,location:{href:'https://example.com/?session=example'},
+    history:{replaceState:(_,__,url)=>urls.push(String(url))},
+    document:{querySelector:()=>({close:()=>closed++})}});
+  vm.runInContext(source.slice(0,source.indexOf("document.addEventListener('click'")),context);
+  context.mockApi=(path,body)=>new Promise((resolve,reject)=>requests.push({path,body,resolve,reject}));
+  context.mockToast=message=>messages.push(message);
+  vm.runInContext(`api=mockApi;render=()=>{};toast=mockToast;
+    state.session={code:'example',role:'host'};state.currentCode='example';
+    state.sessions=[{code:'example'}];state.roster=['Old name'];state.leaderboard={players:['Old result']};`,context);
+  const current=()=>JSON.parse(vm.runInContext('JSON.stringify(state)',context));
+  return {context,requests,urls,messages,current,closed:()=>closed};
+}
+
+test('deletion waits for success, clears stale data, and never auto-creates a replacement',async()=>{
+  const {context,requests,urls,messages,current,closed}=deletionClient();
+  const deleting=context.deleteSession('example');
+  assert.equal(current().session.code,'example');
+  assert.equal(closed(),0);
+  assert.equal(requests[0].path,'/api/sessions/example/delete');
+  requests[0].resolve({code:'example',deleted:true});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(current().session,null);
+  assert.deepEqual(current().sessions,[]);
+  assert.deepEqual(current().roster,[]);
+  assert.equal(current().leaderboard,null);
+  assert.equal(current().currentCode,null);
+  assert.equal(closed(),1);
+  assert.deepEqual(urls,['https://example.com/']);
+  assert.deepEqual(messages,['Session deleted.']);
+  assert.equal(requests[1].path,'/api/sessions');
+  assert.equal(requests[1].body,undefined);
+  requests[1].reject(new Error('History offline'));
+  await deleting;
+  assert.equal(requests.length,2);
+  assert.equal(current().session,null);
+});
+
+test('failed deletion keeps the session and confirmation available for retry',async()=>{
+  const {context,requests,urls,messages,current,closed}=deletionClient();
+  const deleting=context.deleteSession('example');
+  requests[0].reject(new Error('Could not delete session'));
+  await assert.rejects(deleting,/Could not delete session/);
+  assert.equal(current().session.code,'example');
+  assert.equal(current().sessions.length,1);
+  assert.equal(closed(),0);
+  assert.deepEqual(urls,[]);
+  assert.deepEqual(messages,[]);
+});
+
+test('deletion ignores a stale confirmation or a non-host',async()=>{
+  const {context,requests}=deletionClient();
+  await context.deleteSession('another-session');
+  vm.runInContext("state.session.role='player'",context);
+  await context.deleteSession('example');
+  assert.deepEqual(requests,[]);
+});
+
 function rosterClient(role='host'){
   const context=vm.createContext({});
   vm.runInContext(source.slice(0,source.indexOf("document.addEventListener('click'")),context);

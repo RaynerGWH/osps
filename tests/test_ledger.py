@@ -129,6 +129,38 @@ class LedgerTests(unittest.TestCase):
     def test_new_session_does_not_add_fake_player(self):
         self.assertEqual(self.get()['players'], [])
 
+    def test_delete_session_checks_owner_and_cleans_up_settlement_and_receipts(self):
+        a, b = self.populated()
+        self.call(self.path + 'join', {'name': 'Friend'}, self.friend)
+        friend = self.get(device=self.friend)['my_player_id']
+        self.call(self.path + 'settle', {'values': [
+            {'player_id': a, 'amount': '200'}, {'player_id': b, 'amount': '0'},
+            {'player_id': friend, 'amount': '0'}]})
+        other = self.call('/api/sessions', {'name': 'Keep me'})['code']
+        with server.database() as db:
+            db.execute('INSERT INTO requests VALUES(?,?,?,?)',
+                       (self.host, 'old-receipt', 'fingerprint', json.dumps(self.get())))
+        for device in (self.friend, 'outsider'):
+            with self.assertRaises(server.UserError) as failure:
+                self.call(self.path + 'delete', {}, device)
+            self.assertEqual(failure.exception.status, 403)
+        result = self.call(self.path + 'delete', {})
+        self.assertEqual(result, {'code': self.code, 'deleted': True})
+        self.assertEqual(self.call(self.path + 'delete', {}), result)
+        with server.database() as db:
+            for table in ('players', 'buyins', 'transfers', 'activity', 'requests'):
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM ' + table).fetchone()[0], 0)
+            self.assertEqual([s['code'] for s in server.listing(db, self.host)['sessions']], [other])
+            self.assertEqual(server.listing(db, self.friend)['sessions'], [])
+        with self.assertRaises(server.UserError) as failure:
+            self.get()
+        self.assertEqual(failure.exception.status, 404)
+
+    def test_delete_empty_active_session(self):
+        self.call(self.path + 'delete', {})
+        with server.database() as db:
+            self.assertEqual(server.listing(db, self.host)['sessions'], [])
+
     def test_saved_players_remember_names_without_carrying_over_amounts(self):
         self.call(self.path + 'players', {'name': 'Zoe', 'amount': '100'})
         self.call(self.path + 'players', {'name': 'rayner', 'amount': '50'})

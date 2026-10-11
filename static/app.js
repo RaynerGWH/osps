@@ -38,7 +38,7 @@ async function api(path,data){
   if(pendingKey&&(response.ok||(response.status>=400&&response.status<500&&response.status!==429))){
     pendingRequests.delete(pendingKey);try{if(storageKey)sessionStorage.removeItem(storageKey);}catch{}
   }
-  if(!response.ok)throw new Error(result.error||'Could not save. Please try again.');
+  if(!response.ok){const error=new Error(result.error||'Could not save. Please try again.');error.status=response.status;throw error;}
   return result;
 }
 function toast(text){$('#toast').textContent=text;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),2800);}
@@ -48,7 +48,7 @@ function currentSessionCode(){
   return state.currentCode||state.sessions.find(s=>s.status==='active')?.code||state.sessions[0]?.code||state.session?.code;
 }
 function renderNavigation(){
-  const board=state.view==='leaderboard',current=!board&&state.session?.code===currentSessionCode();
+  const board=state.view==='leaderboard',current=!board&&Boolean(state.session)&&state.session.code===currentSessionCode();
   $('#site-nav').innerHTML=`<nav class="topbar" aria-label="Main navigation"><div class="nav-inner">
     <span class="wordmark"><img src="/favicon.svg?v=67" alt="" width="48" height="44">o$p$</span>
     <div class="nav-links"><button class="nav-link ${current?'active':''}" data-action="current" ${current?'aria-current="page"':''}>Current session</button><button class="nav-link ${!board&&!current?'active':''}" data-action="history" ${!board&&!current?'aria-current="page"':''}>History</button><button class="nav-link ${board?'active':''}" data-action="leaderboard" ${board?'aria-current="page"':''}>Leaderboard</button></div>
@@ -57,13 +57,13 @@ function renderNavigation(){
 }
 function render(){
   if(state.view==='leaderboard')return renderLeaderboard();
-  const s=state.session;if(!s)return;
+  const s=state.session;if(!s){renderNavigation();$('#app').innerHTML=`<header class="session-bar"><h1>Sessions</h1></header><div class="table-frame"><p class="empty">${state.sessions.length?'Choose a session from History.':'No sessions yet.'}</p></div>`;return;}
   const closed=s.status==='settled',host=s.role==='host',guest=s.role==='guest';
   const animate=!state.animated.has(s.code);state.animated.add(s.code);
   renderNavigation();
   $('#app').innerHTML=`<header class="session-bar ${animate?'enter':''}">
     <div class="session-title"><div class="date"><span>${date(s.created)}</span><span class="meta-separator" aria-hidden="true">·</span><span>SGD</span>${s.demo?'<span class="badge">Sample</span>':''}<span class="status-pill ${closed?'settled':'live'}">${closed?'Settled':'In progress'}</span></div><h1>${esc(s.name)}</h1></div>
-    <div class="actions">${closed?'<button class="button primary" data-action="copy">Copy summary</button>':guest?'<button class="button primary" data-action="join">Join session</button>':`<button class="button primary" data-action="buyin"><span aria-hidden="true">+</span> Add buy-in</button><button class="button" data-action="cashouts" ${s.players.length&&s.total_buyin?'':'disabled'}>${host?'Settle up':'Final amount'}</button>`}</div>
+    <div class="actions">${closed?'<button class="button primary" data-action="copy">Copy summary</button>':guest?'<button class="button primary" data-action="join">Join session</button>':`<button class="button primary" data-action="buyin"><span aria-hidden="true">+</span> Add buy-in</button><button class="button" data-action="cashouts" ${s.players.length&&s.total_buyin?'':'disabled'}>${host?'Settle up':'Final amount'}</button>`}${host?'<details class="session-menu"><summary aria-label="Session options" title="Session options"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></summary><div class="session-menu-items"><button data-action="delete-session">Delete session</button></div></details>':''}</div>
   </header><div id="connection"></div>
   <section class="table-frame ${animate?'enter enter-delay':''}"><div class="table-scroll"><table aria-label="Players and amounts"><thead><tr><th class="rank">#</th><th>Player</th><th class="numeric">Buy-ins</th>${closed?'<th class="numeric final-column">Cash out</th><th class="numeric">Net result</th>':''}</tr></thead><tbody>${ordered().map((p,i)=>`<tr class="${i<3?'top':''}"><td class="rank">${String(i+1).padStart(2,'0')}</td><td class="player-cell"><span class="player"><span class="player-dot" aria-hidden="true"></span><button data-action="player" data-id="${p.id}">${esc(p.name)}</button></span></td><td class="numeric">${money(p.buyin)}</td>${closed?`<td class="numeric final-column">${money(p.cashout)}</td><td class="numeric ${p.cashout>=p.buyin?'green':'red'}">${signed(p.cashout-p.buyin)}</td>`:''}</tr>`).join('')}</tbody></table></div>${!s.players.length?'<div class="empty">No buy-ins yet.</div>':''}<div class="total-row"><span>${s.players.length} player${s.players.length===1?'':'s'}</span><span>${closed?'Buy-ins / cash-outs':'Total buy-ins'}<strong>${money(s.total_buyin)}</strong></span></div></section>
   ${closed?settlementHTML():''}${buyinHistoryHTML()}`;
@@ -157,6 +157,27 @@ function modal(title,body,wide=false,titleAction=''){
 function showError(message){if($('#modal').open){const el=$('#modal-error');el.textContent=message;el.classList.remove('hidden');}else toast(message);}
 function amountField(id,value=''){return `<div class="money-input"><span>S$</span><input id="${id}" name="amount" inputmode="decimal" autocomplete="off" required value="${value}" placeholder="0.00" pattern="[0-9]{1,6}([.][0-9]{1,2})?" aria-label="Buy-in amount"></div>`;}
 function newSession(){modal('New session',`<form id="new-session"><div class="field"><label for="session-name">Name</label><input id="session-name" name="name" required maxlength="70" value="${esc(date(Date.now()))}"></div><div class="dialog-actions"><button class="button primary" type="submit">Start session</button></div></form>`);}
+function deleteSessionModal(){
+  const s=state.session;if(s?.role!=='host')return;
+  $('.session-menu')?.removeAttribute('open');
+  modal('Delete session?',`<p class="delete-session-name">${esc(s.name)}</p><p class="inline-note">This permanently removes its buy-ins, payments and results, including from the leaderboard.</p><div class="dialog-actions"><button class="button" data-action="close" autofocus>Cancel</button><button class="button danger" data-action="confirm-delete-session" data-code="${esc(s.code)}">Delete session</button></div>`);
+  $('[data-action="close"]',$('.dialog-actions'))?.focus();
+}
+function forgetSession(code){
+  state.sessions=state.sessions.filter(s=>s.code!==code);
+  state.roster=[];state.leaderboard=null;state.leaderboardRequest++;
+  if(state.currentCode===code)state.currentCode=null;
+  if(state.session?.code===code){state.session=null;state.view='session';}
+  const url=new URL(location.href);
+  if(url.searchParams.get('session')===code){url.searchParams.delete('session');url.searchParams.delete('view');history.replaceState({},'',url);}
+}
+async function deleteSession(code){
+  if(state.session?.code!==code||state.session.role!=='host')return;
+  await api(`/api/sessions/${encodeURIComponent(code)}/delete`,{});
+  forgetSession(code);$('#modal').close();render();toast('Session deleted.');
+  try{await refreshSessions();}catch{/* The deletion succeeded even if history cannot refresh yet. */}
+  render();
+}
 const tidyName=value=>String(value??'').trim().replace(/\s+/g,' ');
 const nameKey=value=>tidyName(value).toLocaleLowerCase('en-SG');
 function playerNames(mode){
@@ -275,18 +296,18 @@ async function setPaymentPaid(id,paid){
   render();
   try{
     const saved=await api(`/api/sessions/${code}/paid`,{transfer_id:id,paid});
-    if(state.session.code===code){
+    if(state.session?.code===code){
       // Merge only this payment. Another payment may already have changed
       // while this response was in flight.
       const current=state.session.transfers.find(t=>t.id===id);
       if(current)current.paid=Boolean(saved.transfers.find(t=>t.id===id).paid);
     }
   }catch(err){
-    if(state.session.code===code){const current=state.session.transfers.find(t=>t.id===id);if(current)current.paid=previous;}
+    if(state.session?.code===code){const current=state.session.transfers.find(t=>t.id===id);if(current)current.paid=previous;}
     showError(err.message);
   }finally{
     state.paymentSaves.delete(key);
-    if(state.session.code===code){
+    if(state.session?.code===code){
       const focusedId=document.activeElement?.dataset?.transferId;
       render();
       if(focusedId)$(`input[data-transfer-id="${focusedId}"]`)?.focus({preventScroll:true});
@@ -294,6 +315,7 @@ async function setPaymentPaid(id,paid){
   }
 }
 document.addEventListener('click',async event=>{
+  if(!event.target.closest('.session-menu'))$('.session-menu')?.removeAttribute('open');
   const el=event.target.closest('[data-action]');if(!el||el.disabled||state.busy)return;
   const action=el.dataset.action;
   try{
@@ -309,6 +331,8 @@ document.addEventListener('click',async event=>{
     if(action==='cashouts')return cashoutModal();
     if(action==='join')return joinModal();
     if(action==='new')return newSession();
+    if(action==='delete-session')return deleteSessionModal();
+    if(action==='confirm-delete-session'){state.busy=true;el.disabled=true;await deleteSession(el.dataset.code);return;}
     if(action==='history')return sessionHistory();
     if(action==='leaderboard')return openLeaderboard();
     if(action==='player-stats')return playerStatsModal(el.dataset.key);
@@ -331,6 +355,9 @@ document.addEventListener('click',async event=>{
     }
     if(action==='confirm-remove'){state.busy=true;el.disabled=true;await save('undo',{entry_id:Number(el.dataset.id)});toast('Buy-in removed.');}
   }catch(err){showError(err.message);}finally{state.busy=false;if(el.isConnected)el.disabled=false;}
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&$('.session-menu[open]')){const menu=$('.session-menu');menu.removeAttribute('open');$('summary',menu).focus();}
 });
 document.addEventListener('change',async event=>{
   if(event.target.matches('input[data-transfer-id]')){
@@ -383,15 +410,20 @@ $('#modal').addEventListener('click',event=>{
   if(event.target!==$('#modal')||state.busy)return;const r=$('#modal').getBoundingClientRect();
   if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)$('#modal').close();
 });
+$('#modal').addEventListener('cancel',event=>{if(state.busy)event.preventDefault();});
 async function poll(){
   if(state.view==='leaderboard'||!state.session||state.busy||state.paymentSaves.size||state.polling||$('#modal').open||document.hidden||document.activeElement?.tagName==='SELECT')return;
   state.polling=true;const code=state.session.code,writeVersion=state.writeVersion;
-  try{const fresh=await api('/api/sessions/'+code);if(state.view==='leaderboard'||state.session.code!==code||state.busy||state.writeVersion!==writeVersion)return;if(JSON.stringify(fresh)!==JSON.stringify(state.session)){state.session=fresh;render();}else if($('#connection'))$('#connection').textContent='';}
-  catch{if($('#connection')){$('#connection').className='connection';$('#connection').textContent='Offline. Reconnecting...';}}
+  try{const fresh=await api('/api/sessions/'+code);if(state.view==='leaderboard'||state.session?.code!==code||state.busy||state.writeVersion!==writeVersion)return;if(JSON.stringify(fresh)!==JSON.stringify(state.session)){state.session=fresh;render();}else if($('#connection'))$('#connection').textContent='';}
+  catch(err){
+    if(state.view==='leaderboard'||state.session?.code!==code||state.busy||state.writeVersion!==writeVersion)return;
+    if(err.status===404){forgetSession(code);render();toast('This session is no longer available.');}
+    else if($('#connection')){$('#connection').className='connection';$('#connection').textContent='Offline. Reconnecting...';}
+  }
   finally{state.polling=false;}
 }
 async function start(){
-  try{await refreshSessions();const params=new URL(location.href).searchParams,code=params.get('session');if(params.get('view')==='leaderboard'){if(code)state.session=pendingPaymentView(await api('/api/sessions/'+encodeURIComponent(code)));return await openLeaderboard();}if(code)return await openSession(code);if(state.sessions.length)return await openSession(state.sessions[0].code);const result=await api('/api/sessions',{name:date(Date.now())});await refreshSessions();await openSession(result.code);}
-  catch(err){$('#app').innerHTML=`<p class="error">${esc(err.message)}</p><button class="button primary" data-action="new">New session</button>`;}
+  try{await refreshSessions();const params=new URL(location.href).searchParams,code=params.get('session');if(params.get('view')==='leaderboard'){if(code){try{state.session=pendingPaymentView(await api('/api/sessions/'+encodeURIComponent(code)));}catch(err){if(err.status!==404)throw err;forgetSession(code);}}return await openLeaderboard();}if(code)return await openSession(code);if(state.sessions.length)return await openSession(state.sessions[0].code);render();}
+  catch(err){renderNavigation();$('#app').innerHTML=`<p class="error">${esc(err.message)}</p><button class="button primary" data-action="new">New session</button>`;}
 }
 start();setInterval(poll,3000);

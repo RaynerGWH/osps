@@ -46,7 +46,7 @@ BEGIN
 
     EXECUTE format('ALTER TABLE %I.poker_sessions ENABLE ROW LEVEL SECURITY', target_schema);
     EXECUTE format('REVOKE ALL ON TABLE %I.poker_sessions FROM PUBLIC, anon, authenticated', target_schema);
-    EXECUTE format('GRANT SELECT, INSERT, UPDATE ON TABLE %I.poker_sessions TO service_role', target_schema);
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I.poker_sessions TO service_role', target_schema);
 
     EXECUTE format('COMMENT ON TABLE %I.poker_sessions IS %L', target_schema,
         'Poker sessions with player buy-ins, final amounts, and settlement history. Amounts are integer SGD cents. Server access only.');

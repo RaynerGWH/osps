@@ -43,13 +43,28 @@ class MemoryAPI:
             callback, self.conflict = self.conflict, None
             callback(self.rows[row['session_code']])
             return None
-        if self.rows[row['session_code']]['revision'] != previous['revision']:
+        if row['session_code'] not in self.rows or self.rows[row['session_code']]['revision'] != previous['revision']:
             return None
         self.rows[row['session_code']] = copy.deepcopy(row)
         if self.lose_reply:
             self.lose_reply = False
             raise CloudError('Reply lost after save')
         return copy.deepcopy(row)
+
+    def delete(self, previous):
+        code = previous['session_code']
+        if self.conflict:
+            callback, self.conflict = self.conflict, None
+            callback(self.rows[code])
+            return False
+        current = self.rows.get(code)
+        if not current or current['revision'] != previous['revision'] or current['owner_hash'] != previous['owner_hash']:
+            return False
+        del self.rows[code]
+        if self.lose_reply:
+            self.lose_reply = False
+            raise CloudError('Reply lost after delete')
+        return True
 
 
 class SupabaseTests(unittest.TestCase):
@@ -79,6 +94,61 @@ class SupabaseTests(unittest.TestCase):
         self.assertEqual(first, self.call('/api/sessions', {'name': 'Repeat'}, key=key))
         with self.assertRaises(server.UserError):
             self.call('/api/sessions', {'name': 'Changed'}, key=key)
+
+    def test_delete_requires_host_and_removes_only_selected_session(self):
+        self.populated()
+        self.call(self.path + 'join', {'name': 'Friend'}, self.friend)
+        other = self.call('/api/sessions', {'name': 'Keep me'})['code']
+        for device in (self.friend, 'outsider'):
+            with self.assertRaises(server.UserError) as failure:
+                self.call(self.path + 'delete', {}, device)
+            self.assertEqual(failure.exception.status, 403)
+        self.assertEqual(self.call(self.path + 'delete', {}), {'code': self.code, 'deleted': True})
+        self.assertIsNone(self.api.get(self.code))
+        self.assertEqual([s['code'] for s in self.store.listing(self.host)['sessions']], [other])
+        self.assertEqual(self.store.listing(self.friend)['sessions'], [])
+        for action, body in [('players', {'name': 'Late player'}), ('paid', {'transfer_id': 1, 'paid': True})]:
+            with self.assertRaises(server.UserError) as failure:
+                self.call(self.path + action, body)
+            self.assertEqual(failure.exception.status, 404)
+
+    def test_delete_retries_after_lost_reply_and_revision_conflict(self):
+        self.populated()
+        self.api.conflict = lambda row: row.update(revision=row['revision'] + 1)
+        self.api.lose_reply = True
+        key = 'delete-request-lost-response'
+        with self.assertRaises(CloudError):
+            self.call(self.path + 'delete', {}, key=key)
+        self.store = SupabaseStore(self.api, server)
+        self.assertEqual(self.call(self.path + 'delete', {}, key=key), {'code': self.code, 'deleted': True})
+        self.assertEqual(self.api.rows, {})
+
+    def test_stale_cloud_write_cannot_restore_a_deleted_session(self):
+        self.populated()
+        def delete_during_write(row):
+            self.call(self.path + 'delete', {})
+        self.api.conflict = delete_during_write
+        with self.assertRaises(server.UserError) as failure:
+            self.call(self.path + 'players', {'name': 'Late'})
+        self.assertEqual(failure.exception.status, 404)
+        self.assertIsNone(self.api.get(self.code))
+
+    def test_cloud_delete_is_filtered_by_session_owner_and_revision(self):
+        api = SupabaseAPI('https://example.com', 'sb_secret_test')
+        row = self.api.get(self.code)
+        with patch.object(api, 'request', return_value=[{'session_code': self.code}]) as request:
+            self.assertTrue(api.delete(row))
+        self.assertEqual(request.call_args.args, ('DELETE', {
+            'session_code': 'eq.' + self.code, 'owner_hash': 'eq.' + self.host,
+            'revision': 'eq.0', 'select': 'session_code'}))
+
+    def test_delete_rejects_reusing_another_mutations_request_id(self):
+        key = 'request-already-used-for-buyin'
+        self.call(self.path + 'players', {'name': 'A'}, key=key)
+        with self.assertRaises(server.UserError) as failure:
+            self.call(self.path + 'delete', {}, key=key)
+        self.assertEqual(failure.exception.status, 409)
+        self.assertIsNotNone(self.api.get(self.code))
 
     def test_history_beyond_1000_sessions_keeps_every_game_and_access_scope(self):
         self.call(self.path + 'players', {'name': 'Old regular', 'amount': '100'})

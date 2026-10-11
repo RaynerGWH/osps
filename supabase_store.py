@@ -99,6 +99,15 @@ class SupabaseAPI:
         rows = self.request('PATCH', {'session_code': 'eq.' + previous['session_code'], 'revision': 'eq.' + str(previous['revision'])}, payload, 'return=representation')
         return rows[0] if rows else None
 
+    def delete(self, previous):
+        rows = self.request('DELETE', {
+            'session_code': 'eq.' + previous['session_code'],
+            'owner_hash': 'eq.' + previous['owner_hash'],
+            'revision': 'eq.' + str(previous['revision']),
+            'select': 'session_code',
+        }, prefer='return=representation')
+        return bool(rows)
+
 
 def metadata(row):
     # Private server metadata stays inside the first player's JSON object. It is
@@ -304,6 +313,18 @@ class SupabaseStore:
             raise self.domain.UserError('Unknown action.', 404)
         code, action = match.groups()
         for _ in range(6):
+            if action == 'delete':
+                previous = self.api.get(code)
+                # A missing row is a successful retry after a lost delete reply.
+                if previous is None:
+                    return {'code': code, 'deleted': True}
+                self.require_host(previous, device)
+                prior_fingerprint = metadata(previous).get('requests', {}).get(key)
+                if prior_fingerprint is not None and prior_fingerprint != fingerprint:
+                    raise self.domain.UserError('This request identifier was already used for another action.', 409)
+                if self.api.delete(previous):
+                    return {'code': code, 'deleted': True}
+                continue
             previous = self.get_row(code)
             row = copy.deepcopy(previous)
             receipts = metadata(row).get('requests', {})

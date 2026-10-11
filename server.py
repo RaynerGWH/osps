@@ -365,6 +365,18 @@ def mutate(db, path, body, device):
     if not match:
         raise UserError('Unknown action.', 404)
     code, action = match.groups()
+    if action == 'delete':
+        session = db.execute('SELECT * FROM sessions WHERE code=?', (code,)).fetchone()
+        if session is not None:
+            require_host(session, device)
+            db.execute('DELETE FROM transfers WHERE session=?', (code,))
+            db.execute('DELETE FROM buyins WHERE player IN (SELECT id FROM players WHERE session=?)', (code,))
+            db.execute('DELETE FROM activity WHERE session=?', (code,))
+            db.execute('DELETE FROM players WHERE session=?', (code,))
+            db.execute('DELETE FROM sessions WHERE code=?', (code,))
+            # Old retry receipts must not return a deleted ledger's contents.
+            db.execute("DELETE FROM requests WHERE json_extract(response, '$.code')=?", (code,))
+        return {'code': code, 'deleted': True}
     session = get_session(db, code)
     if action == 'rename':
         player = get_player(db, session, body.get('player_id'), device)

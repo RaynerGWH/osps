@@ -80,6 +80,19 @@ class StatisticsTests(unittest.TestCase):
                 for p, amount in zip(state['players'], cashouts + ['0'])]}, host)
         return code, state
 
+    def test_deleted_session_disappears_from_stats_without_changing_other_games(self):
+        for self.backend in ('sqlite', 'cloud'):
+            with self.subTest(backend=self.backend):
+                deleted, _ = self.game(['A', 'B'], ['200', '0'])
+                kept, _ = self.game(['A', 'B'], ['50', '150'])
+                self.assertEqual(self.board()['session_count'], 2)
+                self.call('/api/sessions/' + deleted + '/delete', {})
+                board = self.board()
+                self.assertEqual(board['session_count'], 1)
+                self.assertEqual(board['total_buyin'], 20000)
+                self.assertEqual([(p['name'], p['net']) for p in board['players']], [('B', 5000), ('A', -5000)])
+                self.assertTrue(all([s['code'] for s in p['history']] == [kept] for p in board['players']))
+
     def test_both_stores_aggregate_only_accessible_finished_games(self):
         for self.backend in ('sqlite', 'cloud'):
             with self.subTest(backend=self.backend):

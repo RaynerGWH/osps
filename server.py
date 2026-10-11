@@ -22,6 +22,8 @@ DB_PATH = Path(os.environ.get('POKER_DB', str(ROOT / 'data' / 'ledger.sqlite3'))
 COOKIE_SECURE = os.environ.get('COOKIE_SECURE', '0') == '1'
 CLOUD_STORE = None
 HISTORY_PAGE_SIZE = 50
+STARTER_PLAYERS = ('Aloysius', 'Arden', 'Brendon', 'Byron', 'Febie',
+                   'Isaiah', 'Min', 'Rayner', 'Vernon', 'ZS')
 
 
 class UserError(Exception):
@@ -214,6 +216,23 @@ def listing(db, device, offset=0):
       (device, device, HISTORY_PAGE_SIZE + 1, offset))]
     return {'sessions': rows[:HISTORY_PAGE_SIZE],
             'next_offset': offset + HISTORY_PAGE_SIZE if len(rows) > HISTORY_PAGE_SIZE else None}
+
+
+def player_directory(names):
+    # Starter spelling wins; recent history supplies other remembered names.
+    unique = {name.casefold(): name for name in STARTER_PLAYERS}
+    for name in names:
+        name = clean_name(name)
+        unique.setdefault(name.casefold(), name)
+    return {'players': sorted(unique.values(), key=str.casefold)}
+
+
+def saved_players(db, device):
+    rows = db.execute('''SELECT p.name FROM players p JOIN sessions s ON s.code=p.session
+      WHERE s.demo=0 AND (s.owner=? OR EXISTS
+        (SELECT 1 FROM players member WHERE member.session=s.code AND member.device=?))
+      ORDER BY s.created DESC,s.code DESC,p.id''', (device, device))
+    return player_directory(row['name'] for row in rows)
 
 
 def view(db, code, device):
@@ -416,12 +435,16 @@ class Handler(BaseHTTPRequestHandler):
                     raise UserError('Invalid session history page.')
                 offset = int(value)
             if CLOUD_STORE is not None:
+                if path == '/api/players':
+                    return self.respond(200, CLOUD_STORE.saved_players(device))
                 if path == '/api/sessions':
                     return self.respond(200, CLOUD_STORE.listing(device, offset))
                 match = re.fullmatch(r'/api/sessions/([A-Za-z0-9_-]+)', path)
                 if match:
                     return self.respond(200, CLOUD_STORE.get(match.group(1), device))
             with database() as db:
+                if path == '/api/players':
+                    return self.respond(200, saved_players(db, device))
                 if path == '/api/sessions':
                     return self.respond(200, listing(db, device, offset))
                 match = re.fullmatch(r'/api/sessions/([A-Za-z0-9_-]+)', path)

@@ -129,6 +129,25 @@ class LedgerTests(unittest.TestCase):
     def test_new_session_does_not_add_fake_player(self):
         self.assertEqual(self.get()['players'], [])
 
+    def test_saved_players_remember_names_without_carrying_over_amounts(self):
+        self.call(self.path + 'players', {'name': 'Zoe', 'amount': '100'})
+        self.call(self.path + 'players', {'name': 'rayner', 'amount': '50'})
+        self.call('/api/demo', {})
+        private = self.call('/api/sessions', {'name': 'Private'}, self.friend)['code']
+        self.call('/api/sessions/' + private + '/players', {'name': 'Private person'}, self.friend)
+        joined = self.call('/api/sessions', {'name': 'Joined'}, self.friend)['code']
+        self.call('/api/sessions/' + joined + '/players', {'name': 'Amy'}, self.friend)
+        self.call('/api/sessions/' + joined + '/join', {'name': 'Host'}, self.host)
+        fresh = self.call('/api/sessions', {'name': 'Next session'})['code']
+        self.assertEqual(self.get(fresh)['players'], [])
+        self.assertEqual(self.get(fresh)['total_buyin'], 0)
+        with server.database() as db:
+            names = server.saved_players(db, self.host)['players']
+            self.assertEqual(names, sorted(set(server.STARTER_PLAYERS) | {'Zoe', 'Amy', 'Host'}, key=str.casefold))
+            self.assertNotIn('Sarah', names)
+            self.assertNotIn('Private person', names)
+            self.assertEqual(server.saved_players(db, 'outsider')['players'], list(server.STARTER_PLAYERS))
+
     def test_history_has_no_lifetime_cap_and_pages_without_duplicates(self):
         a, b = self.populated()
         entry = self.call(self.path + 'buyin', {'player_id': a, 'amount': '20'})['buyins'][0]
@@ -279,6 +298,13 @@ class HttpTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as error:
                 self.client.open(self.url + '/api/sessions?offset=' + offset)
             self.assertEqual(error.exception.code, 400)
+
+    def test_saved_player_api_uses_requesting_browser(self):
+        code = self.post('/api/sessions', {'name': 'Names'})['code']
+        self.post('/api/sessions/' + code + '/players', {'name': 'Zoe', 'amount': '100'})
+        response = json.load(self.client.open(self.url + '/api/players'))
+        self.assertEqual(response['players'], sorted([*server.STARTER_PLAYERS, 'Zoe'], key=str.casefold))
+        self.assertEqual(json.load(urllib.request.urlopen(self.url + '/api/players'))['players'], list(server.STARTER_PLAYERS))
 
 
 if __name__ == '__main__':

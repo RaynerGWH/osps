@@ -16,6 +16,10 @@ The interface uses Source Serif 4 for headings and Open Sans for controls and am
 
 New sessions default to the current Singapore date, such as `11 Oct 2026`. The name is editable before starting a session.
 
+The player picker starts with Aloysius, Arden, Brendon, Byron, Febie, Isaiah, Min, Rayner, Vernon, and ZS, sorted alphabetically. Search for a name, select one, or type a new name. Choosing someone already at the table adds another buy-in to their existing entry. Each new session starts with its own amounts.
+
+Names are remembered from non-sample sessions hosted or joined by the current browser, using the existing Supabase data (or SQLite locally). New names become available after they are saved in a session. Capitalisation variants are combined in the picker, and unrelated private sessions are excluded. No new table or migration is needed. The saved list reuses names; it does not grant another player's permissions or create a cross-device account.
+
 **Buy-in history** below the table shows every entry, newest first, with the player, amount, date, and Singapore time. Removed entries remain visible and are excluded from totals. The same log remains available after settlement.
 
 **Session history** lists saved games with their date, status, and total buy-ins. Open any game to see its full ledger and settlement. Older games load in pages, with no lifetime session limit or automatic expiry. Starting a new session leaves all earlier sessions intact. Records remain in the configured database; they do not depend on keeping the app open.

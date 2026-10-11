@@ -28,6 +28,10 @@ class MemoryAPI:
         rows.sort(key=lambda row: (row['created_at'], row['session_code']), reverse=True)
         return copy.deepcopy(rows[offset:offset + limit])
 
+    def roster_rows(self, device, offset=0, limit=200):
+        # Simulate a database row limit smaller than the requested page size.
+        return [{'players': row['players']} for row in self.list(device, offset, min(limit, 2))]
+
     def insert(self, row):
         if row['session_code'] in self.rows:
             raise CloudError('Conflict', 409)
@@ -77,6 +81,7 @@ class SupabaseTests(unittest.TestCase):
             self.call('/api/sessions', {'name': 'Changed'}, key=key)
 
     def test_history_beyond_1000_sessions_keeps_every_game_and_access_scope(self):
+        self.call(self.path + 'players', {'name': 'Old regular', 'amount': '100'})
         original = self.store.get(self.code, self.host)
         with patch.object(server, 'now', return_value='2026-10-11T01:00:00+00:00'):
             for i in range(1005):
@@ -95,6 +100,36 @@ class SupabaseTests(unittest.TestCase):
         self.assertIn(member_code, codes)
         self.assertEqual(self.store.get(self.code, self.host), original)
         self.assertEqual(self.store.listing('outsider')['sessions'], [])
+        self.assertIn('Old regular', self.store.saved_players(self.host)['players'])
+
+    def test_saved_players_persist_across_sessions_and_exclude_private_and_demo_names(self):
+        self.call(self.path + 'players', {'name': 'Zoe', 'amount': '100'})
+        self.call(self.path + 'players', {'name': 'rayner', 'amount': '50'})
+        sample = self.call('/api/sessions', {'name': 'Sample'})['code']
+        self.call('/api/sessions/' + sample + '/players', {'name': 'Sarah'})
+        metadata(self.api.rows[sample])['demo'] = True
+        private = self.call('/api/sessions', {'name': 'Private'}, self.friend)['code']
+        self.call('/api/sessions/' + private + '/players', {'name': 'Private person'}, self.friend)
+        joined = self.call('/api/sessions', {'name': 'Joined'}, self.friend)['code']
+        self.call('/api/sessions/' + joined + '/players', {'name': 'Amy'}, self.friend)
+        self.call('/api/sessions/' + joined + '/join', {'name': 'Host'}, self.host)
+        fresh = self.call('/api/sessions', {'name': 'Next session'})['code']
+        self.store = SupabaseStore(self.api, server)
+        names = self.store.saved_players(self.host)['players']
+        self.assertEqual(names, sorted(set(server.STARTER_PLAYERS) | {'Zoe', 'Amy', 'Host'}, key=str.casefold))
+        self.assertEqual(self.store.saved_players('outsider')['players'], list(server.STARTER_PLAYERS))
+        self.assertEqual(self.store.get(fresh, self.host)['players'], [])
+        self.assertEqual(self.store.get(fresh, self.host)['total_buyin'], 0)
+
+    def test_cloud_roster_reads_only_accessible_sessions_and_player_data(self):
+        api = SupabaseAPI('https://example.com', 'sb_secret_test')
+        with patch.object(api, 'request', return_value=[]) as request:
+            api.roster_rows(self.host, 1000)
+        params = request.call_args.kwargs['params']
+        self.assertEqual(params['offset'], '1000')
+        self.assertEqual(params['select'], 'players')
+        self.assertIn('owner_hash.eq.' + self.host, params['or'])
+        self.assertIn('member_hashes.cs.{%s}' % self.host, params['or'])
 
     def test_cloud_history_requests_a_bounded_page_with_stable_order(self):
         api = SupabaseAPI('https://example.com', 'sb_secret_test')

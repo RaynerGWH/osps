@@ -85,6 +85,9 @@ class SupabaseAPI:
     def list(self, device, offset=0, limit=51):
         return self.request(params={'or': '(owner_hash.eq.%s,member_hashes.cs.{%s})' % (device, device), 'select': 'session_code,name,created_at,status,total_buy_in_cents,transfers', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
 
+    def roster_rows(self, device, offset=0, limit=200):
+        return self.request(params={'or': '(owner_hash.eq.%s,member_hashes.cs.{%s})' % (device, device), 'select': 'players', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
+
     def insert(self, row):
         return self.request('POST', body=row, prefer='return=representation')[0]
 
@@ -119,6 +122,19 @@ class SupabaseStore:
         rows = self.api.list(device, offset, size + 1)
         return {'sessions': [{'code': r['session_code'], 'name': r['name'], 'created': r['created_at'], 'status': r['status'], 'total_buyin': r['total_buy_in_cents'], 'unpaid_count': sum(not t['paid'] for t in r['transfers']), 'demo': 0} for r in rows[:size]],
                 'next_offset': offset + size if len(rows) > size else None}
+
+    def saved_players(self, device):
+        def names():
+            offset = 0
+            while True:
+                rows = self.api.roster_rows(device, offset)
+                if not rows:
+                    return
+                for row in rows:
+                    if not metadata(row).get('demo', False):
+                        yield from (p['name'] for p in row['players'])
+                offset += len(rows)
+        return self.domain.player_directory(names())
 
     def view(self, row, device):
         players = []

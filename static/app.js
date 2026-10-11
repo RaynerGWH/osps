@@ -7,7 +7,7 @@ const signed = cents => (cents>0?'+':cents<0?'-':'')+money(Math.abs(cents));
 const decimal = cents => (cents/100).toFixed(2);
 const date = iso => new Date(iso).toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric',timeZone:'Asia/Singapore'});
 const time = iso => new Date(iso).toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Singapore'});
-const state={session:null,sessions:[],busy:false,polling:false,writeVersion:0,animated:new Set(),paymentSaves:new Map()};
+const state={session:null,sessions:[],roster:[],busy:false,polling:false,writeVersion:0,animated:new Set(),paymentSaves:new Map()};
 let toastTimer;
 const pendingRequests=new Map();
 function requestId(){const bytes=new Uint8Array(20);crypto.getRandomValues(bytes);return [...bytes].map(b=>b.toString(16).padStart(2,'0')).join('');}
@@ -124,10 +124,64 @@ function modal(title,body,wide=false){
 function showError(message){if($('#modal').open){const el=$('#modal-error');el.textContent=message;el.classList.remove('hidden');}else toast(message);}
 function amountField(id,value=''){return `<div class="money-input"><span>S$</span><input id="${id}" name="amount" inputmode="decimal" autocomplete="off" required value="${value}" placeholder="0.00" pattern="[0-9]{1,6}([.][0-9]{1,2})?" aria-label="Buy-in amount"></div>`;}
 function newSession(){modal('New session',`<form id="new-session"><div class="field"><label for="session-name">Name</label><input id="session-name" name="name" required maxlength="70" value="${esc(date(Date.now()))}"></div><div class="dialog-actions"><button class="button primary" type="submit">Start session</button></div></form>`);}
-function buyinModal(playerId){
-  const s=state.session,players=s.players.filter(editable),p=players.find(p=>p.id===Number(playerId));
-  const addNew=s.role==='host',newPlayer=!players.length&&addNew;
-  modal('Add buy-in',`<form id="buyin-form"><div class="field"><label for="buyin-player">Player</label><select id="buyin-player" name="player_id" required>${players.length?'<option value="">Select player</option>':''}${players.map(x=>`<option value="${x.id}" ${p?.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}${addNew?`<option value="new" ${newPlayer?'selected':''}>+ New player</option>`:''}</select></div><div class="field ${newPlayer?'':'hidden'}" id="new-player-field"><label for="new-player-name">Name</label><input id="new-player-name" name="name" maxlength="40" ${newPlayer?'required':''} placeholder="Player name"></div><div class="field"><label for="buyin-amount">Amount</label>${amountField('buyin-amount')}</div><div class="dialog-actions"><button class="button primary" type="submit">Add buy-in</button></div></form>`);
+const tidyName=value=>String(value??'').trim().replace(/\s+/g,' ');
+const nameKey=value=>tidyName(value).toLocaleLowerCase('en-SG');
+function playerNames(mode){
+  const s=state.session,names=new Map();
+  const canAdd=mode==='join'||s.role==='host';
+  if(canAdd)for(const name of state.roster)names.set(nameKey(name),name);
+  if(mode==='buyin')for(const p of s.players.filter(editable)){
+    if(!names.has(nameKey(p.name)))names.set(nameKey(p.name),p.name);
+  }
+  if(mode==='join')for(const p of s.players)names.delete(nameKey(p.name));
+  return [...names.values()].sort((a,b)=>a.localeCompare(b,'en-SG',{sensitivity:'base'}));
+}
+function playerOptionsHTML(mode,query=''){
+  const names=playerNames(mode),key=nameKey(query),typed=tidyName(query);
+  const matches=names.filter(name=>nameKey(name).includes(key));
+  const canAdd=(mode==='join'||state.session.role==='host')&&typed&&!names.some(name=>nameKey(name)===key)&&!state.session.players.some(p=>nameKey(p.name)===key);
+  return matches.map(name=>`<button type="button" class="player-option" data-action="pick-player" data-name="${esc(name)}">${esc(name)}</button>`).join('')+
+    (canAdd?`<button type="button" class="player-option new-player-option" data-action="pick-player" data-name="${esc(typed)}">+ Add ${esc(typed)}</button>`:'');
+}
+function playerPickerHTML(mode,value=''){
+  return `<div class="field"><label for="player-name">${mode==='join'?'Your name':'Player'}</label><input id="player-name" name="name" data-player-mode="${mode}" required maxlength="40" autocomplete="off" spellcheck="false" value="${esc(value)}" placeholder="Search or add a player"><div id="player-options" class="player-options" role="group" aria-label="Players">${playerOptionsHTML(mode,value)}</div></div>`;
+}
+function updatePlayerOptions(){
+  const input=$('#player-name'),options=$('#player-options');
+  if(!input||!options)return;
+  options.innerHTML=playerOptionsHTML(input.dataset.playerMode,input.value);
+}
+async function loadPlayerOptions(){
+  const input=$('#player-name');if(!input)return;
+  if(input.dataset.playerMode==='buyin'&&state.session.role!=='host')return;
+  try{
+    const result=await api('/api/players');state.roster=result.players;
+    if($('#player-name')===input&&!$('#player-options').hidden)updatePlayerOptions();
+  }catch{
+    if($('#player-name')===input){
+      showError('Could not load saved players. You can still enter a name.');
+      $('#player-options').insertAdjacentHTML('beforeend','<button type="button" class="player-option" data-action="retry-players">Retry player list</button>');
+    }
+  }
+}
+function buyinChoice(name,value){
+  const key=nameKey(name),player=state.session.players.find(p=>nameKey(p.name)===key);
+  if(player){
+    if(!editable(player))throw new Error('You can only add your own buy-ins.');
+    return {action:'buyin',body:{player_id:player.id,amount:value}};
+  }
+  if(state.session.role!=='host')throw new Error('Choose your name from this session.');
+  const canonical=state.roster.find(name=>nameKey(name)===key)||tidyName(name);
+  return {action:'players',body:{name:canonical,amount:value}};
+}
+function buyinModal(){
+  const mine=state.session.role==='player'?state.session.players.find(p=>p.id===state.session.my_player_id)?.name:'';
+  modal('Add buy-in',`<form id="buyin-form">${playerPickerHTML('buyin',mine)}<div class="field"><label for="buyin-amount">Amount</label>${amountField('buyin-amount')}</div><div class="dialog-actions"><button class="button primary" type="submit">Add buy-in</button></div></form>`);
+  loadPlayerOptions();
+}
+function joinModal(){
+  modal('Join session',`<form id="join-form">${playerPickerHTML('join')}<div class="dialog-actions"><button type="submit" class="button primary">Join</button></div></form>`);
+  loadPlayerOptions();
 }
 function playerModal(id){
   const s=state.session,p=s.players.find(p=>p.id===Number(id));if(!p)return;
@@ -192,10 +246,15 @@ document.addEventListener('click',async event=>{
   const action=el.dataset.action;
   try{
     if(action==='close')return $('#modal').close();
+    if(action==='pick-player'){
+      $('#player-name').value=el.dataset.name;$('#player-options').hidden=true;
+      ($('#buyin-amount')||$('#join-form button[type="submit"]')).focus();return;
+    }
+    if(action==='retry-players'){$('#modal-error').classList.add('hidden');el.remove();return loadPlayerOptions();}
     if(action==='buyin')return buyinModal();
     if(action==='player')return playerModal(el.dataset.id);
     if(action==='cashouts')return cashoutModal();
-    if(action==='join')return modal('Join session',`<form id="join-form"><div class="field"><label for="join-name">Your name</label><input id="join-name" name="name" required maxlength="40"></div><div class="dialog-actions"><button type="submit" class="button primary">Join</button></div></form>`);
+    if(action==='join')return joinModal();
     if(action==='new')return newSession();
     if(action==='history')return sessionHistory();
     if(action==='current'){
@@ -225,11 +284,14 @@ document.addEventListener('change',async event=>{
     await setPaymentPaid(transfer.id,input.checked);
     return;
   }
-  if(event.target.id==='buyin-player'){
-    const isNew=event.target.value==='new';$('#new-player-field').classList.toggle('hidden',!isNew);$('#new-player-name').required=isNew;if(isNew)$('#new-player-name').focus();
-  }
 });
-document.addEventListener('input',event=>{if(event.target.closest('#cashout-form'))balanceCheck();});
+document.addEventListener('focusin',event=>{
+  if(event.target.id==='player-name'){$('#player-options').hidden=false;updatePlayerOptions();}
+});
+document.addEventListener('input',event=>{
+  if(event.target.closest('#cashout-form'))balanceCheck();
+  if(event.target.id==='player-name'){$('#player-options').hidden=false;updatePlayerOptions();}
+});
 document.addEventListener('submit',async event=>{
   event.preventDefault();const form=event.target;if(state.busy||!form.reportValidity())return;
   state.busy=true;const button=$('button[type="submit"]',form);if(button)button.disabled=true;
@@ -238,8 +300,8 @@ document.addEventListener('submit',async event=>{
     if(form.id==='new-session'){const result=await api('/api/sessions',data);await refreshSessions();$('#modal').close();await openSession(result.code);}
     if(form.id==='buyin-form'||form.id==='player-buyin'){
       if(cents(data.amount)===null||cents(data.amount)===0)throw new Error('Enter a buy-in greater than $0.00.');
-      if(data.player_id==='new')await save('players',{name:data.name,amount:data.amount});
-      else await save('buyin',{player_id:Number(data.player_id),amount:data.amount});
+      const choice=form.id==='buyin-form'?buyinChoice(data.name,data.amount):{action:'buyin',body:{player_id:Number(data.player_id),amount:data.amount}};
+      await save(choice.action,choice.body);
       toast('Buy-in added.');
     }
     if(form.id==='cashout-form'){
@@ -253,7 +315,10 @@ document.addEventListener('submit',async event=>{
         await save('settle',{values});await refreshSessions();render();
       }else await save('cashouts',{values});
     }
-    if(form.id==='join-form'){await save('join',data);await refreshSessions();}
+    if(form.id==='join-form'){
+      const name=state.roster.find(name=>nameKey(name)===nameKey(data.name))||tidyName(data.name);
+      await save('join',{name});await refreshSessions();
+    }
   }catch(err){showError(err.message);}finally{state.busy=false;if(button?.isConnected)button.disabled=false;}
 });
 $('#modal').addEventListener('click',event=>{

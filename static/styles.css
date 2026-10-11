@@ -118,6 +118,12 @@ input,select{min-width:0;width:100%;background:#101b25;border:1px solid #465a6c;
 input::placeholder{color:#7d90a1}
 input[readonly]{opacity:.6}
 .field{margin-bottom:22px}
+.player-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:10px;max-height:232px;overflow:auto;scrollbar-width:none}
+.player-options[hidden]{display:none}
+.player-options:empty{margin:0}
+.player-option{min-height:40px;padding:9px 12px;text-align:left;font-size:13px;line-height:1.5;border:1px solid #3c5061;border-radius:6px;color:var(--text);background:#1d2d3b;overflow-wrap:anywhere}
+.player-option:hover,.player-option:focus-visible{border-color:var(--green);background:#294337;color:var(--green)}
+.new-player-option{grid-column:1/-1;color:var(--green)}
 .money-input{position:relative}
 .money-input span{position:absolute;left:13px;top:13px;color:var(--muted);font-size:14px;pointer-events:none}
 .money-input input{padding-left:42px;font-variant-numeric:tabular-nums}

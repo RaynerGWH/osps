@@ -138,3 +138,36 @@ test('reopening a session while saving preserves the immediate payment status',a
   assert.deepEqual(current().transfers,[]);
   assert.equal(vm.runInContext('state.paymentSaves.size',context),0);
 });
+
+function rosterClient(role='host'){
+  const context=vm.createContext({});
+  vm.runInContext(source.slice(0,source.indexOf("document.addEventListener('click'")),context);
+  vm.runInContext(`state.roster=['ZS','Rayner','Aloysius','Arden','Min'];state.session=${JSON.stringify({role,my_player_id:2,players:[{id:1,name:'rayner'},{id:2,name:'Min'}]})}`,context);
+  return context;
+}
+
+test('player choices are alphabetical, searchable, deduplicated and safely escaped',()=>{
+  const context=rosterClient();
+  assert.deepEqual([...context.playerNames('buyin')],['Aloysius','Arden','Min','Rayner','ZS']);
+  const html=context.playerOptionsHTML('buyin','RAYNER');
+  assert.match(html,/>Rayner<\/button>/);
+  assert.doesNotMatch(html,/Add RAYNER/);
+  assert.doesNotMatch(html,/Aloysius/);
+  const unsafe=context.playerOptionsHTML('buyin','<img src=x>');
+  assert.match(unsafe,/&lt;img src=x&gt;/);
+  assert.doesNotMatch(unsafe,/<img/);
+  assert.deepEqual([...context.playerNames('join')],['Aloysius','Arden','ZS']);
+});
+
+test('saved names reuse current players and never carry player IDs into another session',()=>{
+  const context=rosterClient(),plain=value=>JSON.parse(JSON.stringify(value));
+  assert.deepEqual(plain(context.buyinChoice('  RAYNER  ','50')),{action:'buyin',body:{player_id:1,amount:'50'}});
+  assert.deepEqual(plain(context.buyinChoice('zs','100')),{action:'players',body:{name:'ZS',amount:'100'}});
+  vm.runInContext('state.session.players=[]',context);
+  assert.deepEqual(plain(context.buyinChoice('rayner','25')),{action:'players',body:{name:'Rayner',amount:'25'}});
+  assert.deepEqual(plain(context.buyinChoice('  New   Friend ','10')),{action:'players',body:{name:'New Friend',amount:'10'}});
+  const member=rosterClient('player');
+  assert.deepEqual([...member.playerNames('buyin')],['Min']);
+  assert.throws(()=>member.buyinChoice('Rayner','50'),/only add your own/);
+  assert.throws(()=>member.buyinChoice('Arden','50'),/Choose your name/);
+});

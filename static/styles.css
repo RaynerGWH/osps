@@ -109,8 +109,12 @@ dialog{color:var(--text);background:#17232e;border:1px solid #4b6071;border-radi
 dialog.wide{max-width:620px}
 dialog::backdrop{background:#080f17d6;backdrop-filter:blur(6px)}
 .dialog-head{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:24px 26px 20px;border-bottom:1px solid var(--line)}
+.dialog-title{display:flex;align-items:center;gap:8px;min-width:0}
 .dialog-head h2{font:400 28px/1.2 var(--heading-font);letter-spacing:-.5px;margin:0}
-.close{width:32px;height:32px;display:grid;place-items:center;color:var(--muted);background:none;border:0;font-size:25px;border-radius:4px}
+.dialog-title h2{overflow-wrap:anywhere;min-width:0}
+.edit-name-button{width:36px;height:36px;flex-shrink:0;display:grid;place-items:center;color:var(--muted);background:none;border:0;border-radius:6px}
+.edit-name-button:hover,.edit-name-button:focus-visible{color:var(--green);background:#ffffff08}
+.close{width:32px;height:32px;flex-shrink:0;display:grid;place-items:center;color:var(--muted);background:none;border:0;font-size:25px;border-radius:4px}
 .close:hover{color:var(--text);background:#ffffff08}
 .dialog-body{padding:24px 26px}
 label{display:block;color:#bfccd6;font-size:13px;margin-bottom:9px}
@@ -136,7 +140,6 @@ input[readonly]{opacity:.6}
 .cash-balance{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-top:21px;font-size:12px;line-height:1.8}
 .cash-balance strong{font-weight:600;color:var(--green)}
 .buyin-list{margin:0 0 25px}
-.player-tools{display:flex;justify-content:flex-end;margin-bottom:16px}
 .buyin-entry{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:14px 0;border-bottom:1px solid var(--line);font-size:15px}
 .buyin-entry small{display:block;color:var(--muted);font-size:12px;margin-top:7px;line-height:1.6}
 .buyin-entry .remove{background:none;color:var(--muted);border:0;width:30px;height:30px;font-size:22px}

@@ -115,9 +115,9 @@ function settlementHTML(){
   const s=state.session,names=Object.fromEntries(s.players.map(p=>[p.id,p.name]));
   return `<section class="settlement-section"><div class="section-heading"><h2>Payments</h2><span>${s.transfers.length} transfer${s.transfers.length===1?'':'s'}</span></div><div class="transfers">${s.transfers.length?s.transfers.map(t=>`<div class="transfer"><span class="name">${esc(names[t.from_id])}</span><span class="arrow">→</span><span class="name">${esc(names[t.to_id])}</span><span class="transfer-value"><span class="amount">${money(t.amount)}</span>${paymentCheckbox(t,names)}</span></div>`).join(''):'<div class="empty">No payments due.</div>'}</div></section>`;
 }
-function modal(title,body,wide=false){
+function modal(title,body,wide=false,titleAction=''){
   const el=$('#modal');el.className=wide?'wide':'';
-  el.innerHTML=`<div class="dialog-head"><h2 id="modal-title">${title}</h2><button class="close" data-action="close" aria-label="Close">×</button></div><div class="dialog-body"><div id="modal-error" class="error hidden" role="alert"></div>${body}</div>`;
+  el.innerHTML=`<div class="dialog-head"><div class="dialog-title"><h2 id="modal-title">${title}</h2>${titleAction}</div><button class="close" data-action="close" aria-label="Close">×</button></div><div class="dialog-body"><div id="modal-error" class="error hidden" role="alert"></div>${body}</div>`;
   if(!el.open)el.showModal();
   requestAnimationFrame(()=>{$('input:not([type="hidden"]):not([readonly]),select',el)?.focus();});
 }
@@ -186,7 +186,8 @@ function joinModal(){
 function playerModal(id){
   const s=state.session,p=s.players.find(p=>p.id===Number(id));if(!p)return;
   const entries=s.buyins.filter(b=>b.player===p.id),edit=s.status==='active'&&editable(p);
-  modal(esc(p.name),`${editable(p)?`<div class="player-tools"><button type="button" class="text-button" data-action="rename-player" data-id="${p.id}">Edit name</button></div>`:''}<div class="buyin-list">${entries.length?entries.map(b=>`<div class="buyin-entry ${b.voided?'removed':''}"><span>${money(b.amount)}<small>${date(b.created)} · ${time(b.created)}${b.voided?' · Removed':''}</small></span>${edit&&!b.voided?`<button class="remove" data-action="remove" data-id="${b.id}" aria-label="Remove ${money(b.amount)} buy-in">×</button>`:''}</div>`).join(''):'<p class="inline-note">No buy-ins.</p>'}</div>${edit?`<form id="player-buyin"><input type="hidden" name="player_id" value="${p.id}"><label for="extra-amount">Add buy-in</label>${amountField('extra-amount')}<div class="dialog-actions"><button class="button primary" type="submit">Add buy-in</button></div></form>`:`<div class="cash-balance"><span>Buy-in <strong>${money(p.buyin)}</strong></span>${p.cashout!==null?`<span>Final <strong>${money(p.cashout)}</strong></span>`:''}</div>`}`);
+  const renameButton=editable(p)?`<button type="button" class="edit-name-button" data-action="rename-player" data-id="${p.id}" aria-label="Edit name" title="Edit name"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7a2.12 2.12 0 0 0-3-3L5 16l-1 4Z"/></svg></button>`:'';
+  modal(esc(p.name),`<div class="buyin-list">${entries.length?entries.map(b=>`<div class="buyin-entry ${b.voided?'removed':''}"><span>${money(b.amount)}<small>${date(b.created)} · ${time(b.created)}${b.voided?' · Removed':''}</small></span>${edit&&!b.voided?`<button class="remove" data-action="remove" data-id="${b.id}" aria-label="Remove ${money(b.amount)} buy-in">×</button>`:''}</div>`).join(''):'<p class="inline-note">No buy-ins.</p>'}</div>${edit?`<form id="player-buyin"><input type="hidden" name="player_id" value="${p.id}"><label for="extra-amount">Add buy-in</label>${amountField('extra-amount')}<div class="dialog-actions"><button class="button primary" type="submit">Add buy-in</button></div></form>`:`<div class="cash-balance"><span>Buy-in <strong>${money(p.buyin)}</strong></span>${p.cashout!==null?`<span>Final <strong>${money(p.cashout)}</strong></span>`:''}</div>`}`,false,renameButton);
 }
 function renamePlayerModal(id){
   const p=state.session.players.find(p=>p.id===Number(id));if(!p||!editable(p))return;

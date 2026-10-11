@@ -10,7 +10,7 @@ Python 3.9 or newer is enough. No packages need installing.
 python3 -B server.py --port 8765
 ```
 
-Open http://127.0.0.1:8765. The top navigation has **Current session**, **History**, and **New session**. Use **Add buy-in** to add a player or another buy-in. Click a player's name to view or remove their entries. **Settle up** accepts final chip values for everyone and produces a payment plan. **Copy summary** copies the results and payment statuses.
+Open http://127.0.0.1:8765. The top navigation has **Current session**, **History**, **Leaderboard**, and **New session**. Use **Add buy-in** to add a player or another buy-in. Click a player's name to view or remove their entries. **Settle up** accepts final chip values for everyone and produces a payment plan. **Copy summary** copies the results and payment statuses.
 
 The interface uses Source Serif 4 for headings and Open Sans for controls and amounts. These are locally hosted, open-source alternatives for the requested serif and sans-serif pairing, not JPMorganChase's proprietary font files. Their font licenses are in `static/fonts/`. Page scrolling stays native with hidden scrollbars, and entrance animations respect reduced-motion preferences.
 
@@ -20,11 +20,15 @@ The player picker starts with Aloysius, Arden, Brendon, Byron, Febie, Isaiah, Mi
 
 Names are remembered from non-sample sessions hosted or joined by the current browser, using the existing Supabase data (or SQLite locally). New names become available after they are saved in a session. Capitalisation variants are combined in the picker, and unrelated private sessions are excluded. No new table or migration is needed. The saved list reuses names; it does not grant another player's permissions or create a cross-device account.
 
-To correct a typo, open the player's name and choose **Edit name**. Hosts can edit anyone in their session; joined players can edit their own name. Corrections also work after settlement and update that session's buy-in history, payment names, and copied summary. Player IDs, amounts, payment status, and access stay unchanged. Names cannot be blank or duplicate another player at the table. The saved picker uses the corrected name from that session; other sessions keep their own names.
+To correct a typo, open the player's name and tap the pencil beside their name. Hosts can edit anyone in their session; joined players can edit their own name. Corrections also work after settlement and update that session's buy-in history, payment names, and copied summary. Player IDs, amounts, payment status, and access stay unchanged. Names cannot be blank or duplicate another player at the table. The saved picker uses the corrected name from that session; other sessions keep their own names.
 
 **Buy-in history** below the table shows every entry, newest first, with the player, amount, date, and Singapore time. Removed entries remain visible and are excluded from totals. The same log remains available after settlement.
 
 **Session history** lists saved games with their date, status, and total buy-ins. Open any game to see its full ledger and settlement. Older games load in pages, with no lifetime session limit or automatic expiry. Starting a new session leaves all earlier sessions intact. Records remain in the configured database; they do not depend on keeping the app open.
+
+**Leaderboard** ranks players by total net result across all non-sample, settled sessions hosted or joined by the current browser. It includes sessions played, profitable sessions (wins), win rate, total buy-ins, and net profit or loss. Equal net results share a rank. Tap a player for their average, best and worst results, cash outs, losses, break-even sessions, and individual session history. Open any listed session to see its ledger. On smaller screens, the table keeps rank, player, sessions, and net result visible; the full stats are in the player detail.
+
+Names are matched after trimming whitespace and ignoring capitalisation. Two different people with the same name will be combined; use distinct names for them. A renamed entry is grouped under its corrected name, while other sessions keep their recorded names. Active games, sample games, removed buy-ins, and players with no money recorded are excluded. Payment checkboxes do not change poker results. Statistics are recalculated from saved history whenever the Leaderboard tab opens, with no new table or migration needed.
 
 Each settlement transfer has a **Paid** checkbox. The host or the receiving player can mark it paid or undo a mistaken tick. Other players can see its status. These changes persist with the session, and copied settlements include PAID or UNPAID beside each transfer. Session history shows the number of unpaid transfers, or **All paid** when none remain. Ticking a payment only records its status; it does not transfer money.
 

@@ -315,6 +315,18 @@ class HttpTests(unittest.TestCase):
             self.post('/api/sessions', {'name': 'No'}, origin='https://other.example')
         self.assertEqual(error.exception.code, 403)
 
+    def test_leaderboard_api_uses_requesting_browser_and_settled_results(self):
+        code = self.post('/api/sessions', {'name': 'Stats game'})['code']
+        path = '/api/sessions/' + code + '/'
+        self.post(path + 'players', {'name': 'A', 'amount': '100'})
+        state = self.post(path + 'players', {'name': 'B', 'amount': '100'})
+        self.assertEqual(json.load(self.client.open(self.url + '/api/leaderboard'))['players'], [])
+        self.post(path + 'settle', {'values': [
+            {'player_id': p['id'], 'amount': amount}
+            for p, amount in zip(state['players'], ['150', '50'])]})
+        board = json.load(self.client.open(self.url + '/api/leaderboard'))
+        self.assertEqual([p['net'] for p in board['players']], [5000, -5000])
+        self.assertEqual(json.load(urllib.request.urlopen(self.url + '/api/leaderboard'))['players'], [])
     def test_history_page_validation_and_totals(self):
         code = self.post('/api/sessions', {'name': 'Saved game'})['code']
         self.post('/api/sessions/' + code + '/players', {'name': 'A', 'amount': '100'})

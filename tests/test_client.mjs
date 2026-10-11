@@ -202,3 +202,34 @@ test('name editor is escaped and only available for an editable player',()=>{
   assert.match(html,/value="&lt;Min&gt;"/);
   assert.match(html,/>Save name</);
 });
+
+test('leaderboard keeps original ranks when filtering and escapes player names',()=>{
+  const context=rosterClient();
+  vm.runInContext(`state.leaderboard={players:[
+    {key:'rayner',name:'Rayner',rank:1,sessions:4,wins:3,buyin:40000,net:17550},
+    {key:'<min>',name:'<Min>',rank:2,sessions:2,wins:0,buyin:20000,net:-17550}
+  ]};state.leaderboardQuery='MIN';`,context);
+  const html=context.leaderboardRows();
+  assert.match(html,/>02<\/td>/);
+  assert.match(html,/&lt;Min&gt;/);
+  assert.match(html,/-\$175\.50/);
+  assert.doesNotMatch(html,/Rayner|<Min>/);
+  vm.runInContext("state.leaderboardQuery='nobody'",context);
+  assert.match(context.leaderboardRows(),/No matching players/);
+});
+
+test('leaderboard ignores late responses after leaving and recovers after an error',async()=>{
+  const context=rosterClient(),requests=[];
+  context.URL=URL;context.location={href:'http://localhost/?session=example'};
+  context.history={replaceState(){}};context.window={scrollTo(){}};context.render=()=>{};
+  context.api=()=>new Promise((resolve,reject)=>requests.push({resolve,reject}));
+  const leaving=context.openLeaderboard();
+  vm.runInContext("state.view='session'",context);
+  requests[0].resolve({players:[{name:'Stale'}]});await leaving;
+  assert.equal(vm.runInContext('state.leaderboard',context),null);
+  const failed=context.openLeaderboard();requests[1].reject(new Error('Offline'));await failed;
+  assert.equal(vm.runInContext('state.leaderboardError',context),'Offline');
+  const retry=context.openLeaderboard();requests[2].resolve({players:[],session_count:0,total_buyin:0});await retry;
+  assert.equal(vm.runInContext('state.leaderboardError',context),'');
+  assert.equal(vm.runInContext('state.leaderboard.session_count',context),0);
+});

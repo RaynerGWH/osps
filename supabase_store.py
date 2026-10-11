@@ -88,6 +88,9 @@ class SupabaseAPI:
     def roster_rows(self, device, offset=0, limit=200):
         return self.request(params={'or': '(owner_hash.eq.%s,member_hashes.cs.{%s})' % (device, device), 'select': 'players', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
 
+    def stats_rows(self, device, offset=0, limit=200):
+        return self.request(params={'or': '(owner_hash.eq.%s,member_hashes.cs.{%s})' % (device, device), 'status': 'eq.settled', 'select': 'session_code,name,created_at,status,players,buy_ins', 'order': 'created_at.desc,session_code.desc', 'offset': str(offset), 'limit': str(limit)})
+
     def insert(self, row):
         return self.request('POST', body=row, prefer='return=representation')[0]
 
@@ -135,6 +138,27 @@ class SupabaseStore:
                         yield from (p['name'] for p in row['players'])
                 offset += len(rows)
         return self.domain.player_directory(names())
+
+    def leaderboard(self, device):
+        def sessions():
+            offset = 0
+            while True:
+                rows = self.api.stats_rows(device, offset)
+                if not rows:
+                    return
+                for row in rows:
+                    if row['status'] != 'settled' or metadata(row).get('demo', False):
+                        continue
+                    totals = {}
+                    for entry in row['buy_ins']:
+                        if not entry.get('voided'):
+                            pid = entry['player_id']
+                            totals[pid] = totals.get(pid, 0) + entry['amount']
+                    yield {'code': row['session_code'], 'name': row['name'], 'created': row['created_at'],
+                           'status': row['status'], 'players': [{'name': p['name'], 'cashout': p['cashout'],
+                           'buyin': totals.get(p['id'], 0)} for p in row['players']]}
+                offset += len(rows)
+        return self.domain.player_statistics(sessions())
 
     def view(self, row, device):
         players = []

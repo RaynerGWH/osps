@@ -235,6 +235,61 @@ def saved_players(db, device):
     return player_directory(row['name'] for row in rows)
 
 
+def player_statistics(sessions):
+    """Combine settled games by normalised display name, keeping money in cents."""
+    players = {}
+    starter_names = {name.casefold(): name for name in STARTER_PLAYERS}
+    session_count, total_buyin = 0, 0
+    for session in sessions:
+        if session['status'] != 'settled' or session.get('demo'):
+            continue
+        session_count += 1
+        for p in session['players']:
+            if not p['buyin'] and not p['cashout']:
+                continue
+            name = clean_name(p['name'])
+            key = name.casefold()
+            net = p['cashout'] - p['buyin']
+            if key not in players:
+                players[key] = {'key': key, 'name': starter_names.get(key, name),
+                                'sessions': 0, 'wins': 0, 'losses': 0, 'draws': 0,
+                                'buyin': 0, 'cashout': 0, 'net': 0,
+                                'best': net, 'worst': net, 'history': []}
+            stats = players[key]
+            stats['sessions'] += 1
+            stats['wins'] += net > 0
+            stats['losses'] += net < 0
+            stats['draws'] += net == 0
+            for field in ('buyin', 'cashout'):
+                stats[field] += p[field]
+            stats['net'] += net
+            stats['best'] = max(stats['best'], net)
+            stats['worst'] = min(stats['worst'], net)
+            stats['history'].append({field: session[field] for field in ('code', 'name', 'created')} |
+                                    {'buyin': p['buyin'], 'cashout': p['cashout'], 'net': net})
+            total_buyin += p['buyin']
+    ranked = sorted(players.values(), key=lambda p: (-p['net'], p['key']))
+    for index, p in enumerate(ranked):
+        p['rank'] = ranked[index - 1]['rank'] if index and p['net'] == ranked[index - 1]['net'] else index + 1
+        p['history'].sort(key=lambda s: (s['created'], s['code']), reverse=True)
+    return {'players': ranked, 'session_count': session_count, 'total_buyin': total_buyin}
+
+
+def leaderboard(db, device):
+    rows = db.execute('''SELECT s.code,s.name AS session_name,s.created,p.name,p.cashout,
+      COALESCE(SUM(CASE WHEN b.voided=0 THEN b.amount ELSE 0 END),0) AS buyin
+      FROM sessions s JOIN players p ON p.session=s.code LEFT JOIN buyins b ON b.player=p.id
+      WHERE s.status='settled' AND s.demo=0 AND (s.owner=? OR EXISTS
+        (SELECT 1 FROM players member WHERE member.session=s.code AND member.device=?))
+      GROUP BY s.code,p.id ORDER BY s.created DESC,s.code DESC,p.id''', (device, device))
+    sessions = {}
+    for row in rows:
+        session = sessions.setdefault(row['code'], {'code': row['code'], 'name': row['session_name'],
+                                      'created': row['created'], 'status': 'settled', 'players': []})
+        session['players'].append({field: row[field] for field in ('name', 'buyin', 'cashout')})
+    return player_statistics(sessions.values())
+
+
 def view(db, code, device):
     session = get_session(db, code)
     host = session.pop('owner') == device
@@ -445,6 +500,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise UserError('Invalid session history page.')
                 offset = int(value)
             if CLOUD_STORE is not None:
+                if path == '/api/leaderboard':
+                    return self.respond(200, CLOUD_STORE.leaderboard(device))
                 if path == '/api/players':
                     return self.respond(200, CLOUD_STORE.saved_players(device))
                 if path == '/api/sessions':
@@ -453,6 +510,8 @@ class Handler(BaseHTTPRequestHandler):
                 if match:
                     return self.respond(200, CLOUD_STORE.get(match.group(1), device))
             with database() as db:
+                if path == '/api/leaderboard':
+                    return self.respond(200, leaderboard(db, device))
                 if path == '/api/players':
                     return self.respond(200, saved_players(db, device))
                 if path == '/api/sessions':

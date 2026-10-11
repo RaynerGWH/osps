@@ -7,7 +7,7 @@ const signed = cents => (cents>0?'+':cents<0?'-':'')+money(Math.abs(cents));
 const decimal = cents => (cents/100).toFixed(2);
 const date = iso => new Date(iso).toLocaleDateString('en-SG',{day:'numeric',month:'short',year:'numeric',timeZone:'Asia/Singapore'});
 const time = iso => new Date(iso).toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',timeZone:'Asia/Singapore'});
-const state={session:null,sessions:[],roster:[],busy:false,polling:false,writeVersion:0,animated:new Set(),paymentSaves:new Map()};
+const state={session:null,sessions:[],roster:[],view:'session',leaderboard:null,leaderboardError:'',leaderboardRequest:0,leaderboardQuery:'',busy:false,polling:false,writeVersion:0,animated:new Set(),paymentSaves:new Map()};
 let toastTimer;
 const pendingRequests=new Map();
 function requestId(){const bytes=new Uint8Array(20);crypto.getRandomValues(bytes);return [...bytes].map(b=>b.toString(16).padStart(2,'0')).join('');}
@@ -48,14 +48,15 @@ function currentSessionCode(){
   return state.currentCode||state.sessions.find(s=>s.status==='active')?.code||state.sessions[0]?.code||state.session?.code;
 }
 function renderNavigation(){
-  const current=state.session.code===currentSessionCode();
+  const board=state.view==='leaderboard',current=!board&&state.session?.code===currentSessionCode();
   $('#site-nav').innerHTML=`<nav class="topbar" aria-label="Main navigation"><div class="nav-inner">
     <span class="wordmark"><img src="/favicon.svg?v=67" alt="" width="48" height="44">o$p$</span>
-    <div class="nav-links"><button class="nav-link ${current?'active':''}" data-action="current" ${current?'aria-current="page"':''}>Current session</button><button class="nav-link ${current?'':'active'}" data-action="history" ${current?'':'aria-current="page"'}>History</button></div>
+    <div class="nav-links"><button class="nav-link ${current?'active':''}" data-action="current" ${current?'aria-current="page"':''}>Current session</button><button class="nav-link ${!board&&!current?'active':''}" data-action="history" ${!board&&!current?'aria-current="page"':''}>History</button><button class="nav-link ${board?'active':''}" data-action="leaderboard" ${board?'aria-current="page"':''}>Leaderboard</button></div>
     <button class="button new-session" data-action="new"><span aria-hidden="true">+</span> New session</button>
   </div></nav>`;
 }
 function render(){
+  if(state.view==='leaderboard')return renderLeaderboard();
   const s=state.session;if(!s)return;
   const closed=s.status==='settled',host=s.role==='host',guest=s.role==='guest';
   const animate=!state.animated.has(s.code);state.animated.add(s.code);
@@ -67,6 +68,38 @@ function render(){
   <section class="table-frame ${animate?'enter enter-delay':''}"><div class="table-scroll"><table aria-label="Players and amounts"><thead><tr><th class="rank">#</th><th>Player</th><th class="numeric">Buy-ins</th>${closed?'<th class="numeric final-column">Cash out</th><th class="numeric">Net result</th>':''}</tr></thead><tbody>${ordered().map((p,i)=>`<tr class="${i<3?'top':''}"><td class="rank">${String(i+1).padStart(2,'0')}</td><td class="player-cell"><span class="player"><span class="player-dot" aria-hidden="true"></span><button data-action="player" data-id="${p.id}">${esc(p.name)}</button></span></td><td class="numeric">${money(p.buyin)}</td>${closed?`<td class="numeric final-column">${money(p.cashout)}</td><td class="numeric ${p.cashout>=p.buyin?'green':'red'}">${signed(p.cashout-p.buyin)}</td>`:''}</tr>`).join('')}</tbody></table></div>${!s.players.length?'<div class="empty">No buy-ins yet.</div>':''}<div class="total-row"><span>${s.players.length} player${s.players.length===1?'':'s'}</span><span>${closed?'Buy-ins / cash-outs':'Total buy-ins'}<strong>${money(s.total_buyin)}</strong></span></div></section>
   ${closed?settlementHTML():''}${buyinHistoryHTML()}`;
   revealHistory();
+}
+function resultClass(net){return net>0?'green':net<0?'red':'muted';}
+function leaderboardRows(){
+  const players=state.leaderboard.players.filter(p=>nameKey(p.name).includes(nameKey(state.leaderboardQuery)));
+  return players.map(p=>`<tr class="${p.rank<=3?'top':''}"><td class="rank">${String(p.rank).padStart(2,'0')}</td><td class="player-cell"><span class="player"><span class="player-dot" aria-hidden="true"></span><button data-action="player-stats" data-key="${esc(p.key)}">${esc(p.name)}</button></span></td><td class="numeric">${p.sessions}</td><td class="numeric stats-extra">${p.wins}</td><td class="numeric stats-extra">${Math.round(p.wins/p.sessions*100)}%</td><td class="numeric stats-extra">${money(p.buyin)}</td><td class="numeric net-column ${resultClass(p.net)}">${signed(p.net)}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">No matching players.</td></tr>';
+}
+function renderLeaderboard(){
+  renderNavigation();
+  const data=state.leaderboard,animate=!state.animated.has('leaderboard');
+  if(data)state.animated.add('leaderboard');
+  $('#app').innerHTML=`<header class="session-bar ${animate?'enter':''}"><div class="session-title"><div class="date">All time <span class="meta-separator" aria-hidden="true">·</span> SGD</div><h1>Leaderboard</h1></div>${data?.players.length?`<input type="search" class="leaderboard-search" id="leaderboard-search" aria-label="Find player" placeholder="Find player" value="${esc(state.leaderboardQuery)}">`:''}</header>
+    ${state.leaderboardError?`<div class="leaderboard-message" role="alert"><p>${esc(state.leaderboardError)}</p><button class="button" data-action="leaderboard">Try again</button></div>`:!data?'<p class="loading" role="status">Loading leaderboard...</p>':!data.players.length?'<div class="table-frame"><p class="empty">No settled sessions yet.</p></div>':`
+    <section class="table-frame leaderboard-table ${animate?'enter enter-delay':''}"><div class="table-scroll" tabindex="0" role="region" aria-label="Player rankings"><table aria-label="All-time player rankings"><thead><tr><th class="rank">#</th><th>Player</th><th class="numeric">Sessions</th><th class="numeric stats-extra" title="Sessions with a profit">Wins</th><th class="numeric stats-extra">Win rate</th><th class="numeric stats-extra">Buy-ins</th><th class="numeric">Net result</th></tr></thead><tbody id="leaderboard-rows">${leaderboardRows()}</tbody></table></div><div class="total-row"><span>${data.session_count} settled session${data.session_count===1?'':'s'} · ${data.players.length} player${data.players.length===1?'':'s'}</span><span class="leaderboard-total">Total buy-ins<strong>${money(data.total_buyin)}</strong></span></div></section>`}`;
+}
+async function openLeaderboard(){
+  const request=++state.leaderboardRequest;
+  state.view='leaderboard';state.leaderboard=null;state.leaderboardError='';
+  const url=new URL(location.href);url.searchParams.set('view','leaderboard');history.replaceState({},'',url);
+  render();window.scrollTo(0,0);
+  try{
+    const data=await api('/api/leaderboard');
+    if(state.view!=='leaderboard'||request!==state.leaderboardRequest)return;
+    state.leaderboard=data;
+  }catch(err){
+    if(state.view!=='leaderboard'||request!==state.leaderboardRequest)return;
+    state.leaderboardError=err.message;
+  }
+  if(state.view==='leaderboard'&&request===state.leaderboardRequest)render();
+}
+function playerStatsModal(key){
+  const p=state.leaderboard?.players.find(p=>p.key===key);if(!p)return;
+  modal(esc(p.name),`<div class="stats-result"><span>Net result</span><strong class="${resultClass(p.net)}">${signed(p.net)}</strong></div><dl class="player-stats"><div><dt>Sessions</dt><dd>${p.sessions}</dd></div><div><dt>Profitable sessions</dt><dd>${p.wins} <small>(${Math.round(p.wins/p.sessions*100)}%)</small></dd></div><div><dt>Buy-ins</dt><dd>${money(p.buyin)}</dd></div><div><dt>Cash outs</dt><dd>${money(p.cashout)}</dd></div><div><dt>Average result</dt><dd class="${resultClass(p.net)}">${signed(Math.round(p.net/p.sessions))}</dd></div><div><dt>Best result</dt><dd class="${resultClass(p.best)}">${signed(p.best)}</dd></div><div><dt>Worst result</dt><dd class="${resultClass(p.worst)}">${signed(p.worst)}</dd></div><div><dt>Losses / break-even</dt><dd>${p.losses} / ${p.draws}</dd></div></dl><div class="stats-history"><h3>Sessions</h3><div class="archive-list">${p.history.map(s=>`<button class="archive-session" data-action="open-session" data-code="${esc(s.code)}"><span class="archive-name">${esc(s.name)}<small>${date(s.created)} · Buy-in ${money(s.buyin)}</small></span><span class="archive-total ${resultClass(s.net)}">${signed(s.net)}</span><span class="archive-arrow" aria-hidden="true">→</span></button>`).join('')}</div></div>`,true);
 }
 function buyinHistoryHTML(){
   const entries=state.session.buyins;
@@ -231,7 +264,7 @@ function pendingPaymentView(session){
   }
   return session;
 }
-async function openSession(code){state.session=pendingPaymentView(await api('/api/sessions/'+encodeURIComponent(code)));if(state.session.status==='active')state.currentCode=code;const url=new URL(location.href);url.searchParams.set('session',code);history.replaceState({},'',url);render();window.scrollTo(0,0);}
+async function openSession(code){state.session=pendingPaymentView(await api('/api/sessions/'+encodeURIComponent(code)));state.view='session';state.leaderboardRequest++;if(state.session.status==='active')state.currentCode=code;const url=new URL(location.href);url.searchParams.set('session',code);url.searchParams.delete('view');history.replaceState({},'',url);render();window.scrollTo(0,0);}
 async function save(action,body){state.session=await api(`/api/sessions/${state.session.code}/${action}`,body);$('#modal').close();render();}
 async function setPaymentPaid(id,paid){
   const code=state.session.code,key=code+':'+id,transfer=state.session.transfers.find(t=>t.id===id);
@@ -277,9 +310,12 @@ document.addEventListener('click',async event=>{
     if(action==='join')return joinModal();
     if(action==='new')return newSession();
     if(action==='history')return sessionHistory();
+    if(action==='leaderboard')return openLeaderboard();
+    if(action==='player-stats')return playerStatsModal(el.dataset.key);
     if(action==='current'){
       const code=currentSessionCode();
-      if(code===state.session.code){window.scrollTo(0,0);return;}
+      if(!code)return newSession();
+      if(state.view==='session'&&code===state.session?.code){window.scrollTo(0,0);return;}
       state.busy=true;await openSession(code);return;
     }
     if(action==='older-sessions')return await loadSessionHistory(Number(el.dataset.offset));
@@ -309,6 +345,7 @@ document.addEventListener('focusin',event=>{
   if(event.target.id==='player-name'){$('#player-options').hidden=false;updatePlayerOptions();}
 });
 document.addEventListener('input',event=>{
+  if(event.target.id==='leaderboard-search'){state.leaderboardQuery=event.target.value;$('#leaderboard-rows').innerHTML=leaderboardRows();}
   if(event.target.closest('#cashout-form'))balanceCheck();
   if(event.target.id==='player-name'){$('#player-options').hidden=false;updatePlayerOptions();}
 });
@@ -347,14 +384,14 @@ $('#modal').addEventListener('click',event=>{
   if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)$('#modal').close();
 });
 async function poll(){
-  if(!state.session||state.busy||state.paymentSaves.size||state.polling||$('#modal').open||document.hidden||document.activeElement?.tagName==='SELECT')return;
+  if(state.view==='leaderboard'||!state.session||state.busy||state.paymentSaves.size||state.polling||$('#modal').open||document.hidden||document.activeElement?.tagName==='SELECT')return;
   state.polling=true;const code=state.session.code,writeVersion=state.writeVersion;
-  try{const fresh=await api('/api/sessions/'+code);if(state.session.code!==code||state.busy||state.writeVersion!==writeVersion)return;if(JSON.stringify(fresh)!==JSON.stringify(state.session)){state.session=fresh;render();}else if($('#connection'))$('#connection').textContent='';}
+  try{const fresh=await api('/api/sessions/'+code);if(state.view==='leaderboard'||state.session.code!==code||state.busy||state.writeVersion!==writeVersion)return;if(JSON.stringify(fresh)!==JSON.stringify(state.session)){state.session=fresh;render();}else if($('#connection'))$('#connection').textContent='';}
   catch{if($('#connection')){$('#connection').className='connection';$('#connection').textContent='Offline. Reconnecting...';}}
   finally{state.polling=false;}
 }
 async function start(){
-  try{await refreshSessions();const code=new URL(location.href).searchParams.get('session');if(code)return await openSession(code);if(state.sessions.length)return await openSession(state.sessions[0].code);const result=await api('/api/sessions',{name:date(Date.now())});await refreshSessions();await openSession(result.code);}
+  try{await refreshSessions();const params=new URL(location.href).searchParams,code=params.get('session');if(params.get('view')==='leaderboard'){if(code)state.session=pendingPaymentView(await api('/api/sessions/'+encodeURIComponent(code)));return await openLeaderboard();}if(code)return await openSession(code);if(state.sessions.length)return await openSession(state.sessions[0].code);const result=await api('/api/sessions',{name:date(Date.now())});await refreshSessions();await openSession(result.code);}
   catch(err){$('#app').innerHTML=`<p class="error">${esc(err.message)}</p><button class="button primary" data-action="new">New session</button>`;}
 }
 start();setInterval(poll,3000);

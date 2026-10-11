@@ -1,5 +1,7 @@
 # o$p$
 
+<img width="1728" height="1000" alt="image" src="https://github.com/user-attachments/assets/e3053254-08a8-4532-b2e7-ad39457da257" />
+
 A small session ledger with buy-ins, rebuys, final chip values, and settlement.
 
 ## Run locally

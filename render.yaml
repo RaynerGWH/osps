@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: osps
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: python3 -B -m unittest discover -s tests
+    startCommand: sh start.sh
+    healthCheckPath: /
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_SCHEMA
+        sync: false
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: PYTHONUNBUFFERED
+        value: "1"

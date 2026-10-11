@@ -1,0 +1,266 @@
+import copy
+import hashlib
+import json
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import server
+from config import load_env
+from supabase_store import CloudError, SupabaseAPI, SupabaseStore, metadata
+
+
+class MemoryAPI:
+    def __init__(self):
+        self.rows = {}
+        self.conflict = None
+        self.lose_reply = False
+
+    def get(self, code):
+        return copy.deepcopy(self.rows.get(code))
+
+    def list(self, device, offset=0, limit=51):
+        rows = [row for row in self.rows.values() if row['owner_hash'] == device or device in row['member_hashes']]
+        rows.sort(key=lambda row: (row['created_at'], row['session_code']), reverse=True)
+        return copy.deepcopy(rows[offset:offset + limit])
+
+    def insert(self, row):
+        if row['session_code'] in self.rows:
+            raise CloudError('Conflict', 409)
+        self.rows[row['session_code']] = copy.deepcopy(row)
+        return copy.deepcopy(row)
+
+    def compare_and_swap(self, previous, row):
+        if self.conflict:
+            callback, self.conflict = self.conflict, None
+            callback(self.rows[row['session_code']])
+            return None
+        if self.rows[row['session_code']]['revision'] != previous['revision']:
+            return None
+        self.rows[row['session_code']] = copy.deepcopy(row)
+        if self.lose_reply:
+            self.lose_reply = False
+            raise CloudError('Reply lost after save')
+        return copy.deepcopy(row)
+
+
+class SupabaseTests(unittest.TestCase):
+    def setUp(self):
+        self.api = MemoryAPI()
+        self.store = SupabaseStore(self.api, server)
+        self.host = hashlib.sha256(b'host').hexdigest()
+        self.friend = hashlib.sha256(b'friend').hexdigest()
+        self.counter = 0
+        self.code = self.call('/api/sessions', {'name': 'Poker Night'})['code']
+        self.path = '/api/sessions/' + self.code + '/'
+
+    def call(self, path, body, device=None, key=None):
+        self.counter += 1
+        key = key or 'request-%016d' % self.counter
+        fingerprint = hashlib.sha256((path + json.dumps(body, sort_keys=True)).encode()).hexdigest()
+        return self.store.mutate(path, body, device or self.host, key, fingerprint)
+
+    def populated(self):
+        self.call(self.path + 'players', {'name': 'A', 'amount': '100'})
+        state = self.call(self.path + 'players', {'name': 'B', 'amount': '100'})
+        return [p['id'] for p in state['players']]
+
+    def test_create_replay_and_mismatched_body(self):
+        key = 'create-request-id-123'
+        first = self.call('/api/sessions', {'name': 'Repeat'}, key=key)
+        self.assertEqual(first, self.call('/api/sessions', {'name': 'Repeat'}, key=key))
+        with self.assertRaises(server.UserError):
+            self.call('/api/sessions', {'name': 'Changed'}, key=key)
+
+    def test_history_beyond_1000_sessions_keeps_every_game_and_access_scope(self):
+        original = self.store.get(self.code, self.host)
+        with patch.object(server, 'now', return_value='2026-10-11T01:00:00+00:00'):
+            for i in range(1005):
+                self.call('/api/sessions', {'name': 'Game %d' % i})
+            member_code = self.call('/api/sessions', {'name': 'Joined game'}, self.friend)['code']
+            self.call('/api/sessions/' + member_code + '/join', {'name': 'Host as player'}, self.host)
+            self.call('/api/sessions', {'name': 'Private game'}, self.friend)
+        codes, offset = [], 0
+        while offset is not None:
+            page = self.store.listing(self.host, offset)
+            self.assertLessEqual(len(page['sessions']), 50)
+            codes.extend(s['code'] for s in page['sessions'])
+            offset = page['next_offset']
+        self.assertEqual(len(codes), 1007)
+        self.assertEqual(len(set(codes)), 1007)
+        self.assertIn(member_code, codes)
+        self.assertEqual(self.store.get(self.code, self.host), original)
+        self.assertEqual(self.store.listing('outsider')['sessions'], [])
+
+    def test_cloud_history_requests_a_bounded_page_with_stable_order(self):
+        api = SupabaseAPI('https://example.com', 'sb_secret_test')
+        with patch.object(api, 'request', return_value=[]) as request:
+            api.list(self.host, 1000, 51)
+        params = request.call_args.kwargs['params']
+        self.assertEqual(params['offset'], '1000')
+        self.assertEqual(params['limit'], '51')
+        self.assertEqual(params['order'], 'created_at.desc,session_code.desc')
+        self.assertIn('owner_hash.eq.' + self.host, params['or'])
+        self.assertNotIn('*', params['select'])
+
+    def test_receipt_survives_new_store_instance(self):
+        a, b = self.populated()
+        key = 'buyin-request-id-123'
+        body = {'player_id': a, 'amount': '50'}
+        self.call(self.path + 'buyin', body, key=key)
+        self.store = SupabaseStore(self.api, server)
+        state = self.call(self.path + 'buyin', body, key=key)
+        self.assertEqual(state['players'][0]['buyin'], 15000)
+        with self.assertRaises(server.UserError):
+            self.call(self.path + 'buyin', {'player_id': a, 'amount': '75'}, key=key)
+
+    def test_response_lost_after_commit_is_safe_to_retry(self):
+        a, b = self.populated()
+        self.api.lose_reply = True
+        key = 'lost-response-id-123'
+        with self.assertRaises(CloudError):
+            self.call(self.path + 'buyin', {'player_id': a, 'amount': '50'}, key=key)
+        result = self.call(self.path + 'buyin', {'player_id': a, 'amount': '50'}, key=key)
+        self.assertEqual(result['players'][0]['buyin'], 15000)
+
+    def test_concurrent_buyin_is_rebased_without_losing_either(self):
+        a, b = self.populated()
+
+        def competing_write(row):
+            self.store.add_buyin(row, row['players'][0], '25')
+            row['revision'] += 1
+
+        self.api.conflict = competing_write
+        state = self.call(self.path + 'buyin', {'player_id': a, 'amount': '50'})
+        self.assertEqual(state['players'][0]['buyin'], 17500)
+        self.assertEqual(state['total_buyin'], 27500)
+
+    def test_cashouts_and_settlement_are_atomic(self):
+        a, b = self.populated()
+        before = self.api.get(self.code)
+        with self.assertRaises(server.UserError):
+            self.call(self.path + 'settle', {'values': [{'player_id': a, 'amount': '150'}, {'player_id': b, 'amount': '49.99'}]})
+        self.assertEqual(before, self.api.get(self.code))
+        result = self.call(self.path + 'settle', {'values': [{'player_id': a, 'amount': '150'}, {'player_id': b, 'amount': '50'}]})
+        self.assertEqual(result['status'], 'settled')
+        self.assertEqual(result['transfers'][0]['amount'], 5000)
+        self.assertEqual(self.api.get(self.code)['total_cash_out_cents'], 20000)
+        with self.assertRaises(server.UserError):
+            self.call(self.path + 'buyin', {'player_id': a, 'amount': '10'})
+
+    def test_paid_status_persists_can_be_corrected_and_requires_host_or_recipient(self):
+        self.call(self.path + 'players', {'name': 'A', 'amount': '100'})
+        state = self.call(self.path + 'join', {'name': 'B'}, self.friend)
+        b = state['my_player_id']
+        a = state['players'][0]['id']
+        self.call(self.path + 'buyin', {'player_id': b, 'amount': '100'}, self.friend)
+        with self.assertRaises(server.UserError):
+            self.call(self.path + 'paid', {'transfer_id': 1, 'paid': True})
+        state = self.call(self.path + 'settle', {'values': [{'player_id': a, 'amount': '0'}, {'player_id': b, 'amount': '200'}]})
+        transfer = state['transfers'][0]
+        with self.assertRaises(server.UserError):
+            self.call(self.path + 'paid', {'transfer_id': transfer['id'], 'paid': True}, 'outsider')
+        self.call(self.path + 'paid', {'transfer_id': transfer['id'], 'paid': True}, self.friend)
+        self.store = SupabaseStore(self.api, server)
+        reopened = self.store.get(self.code, self.host)
+        self.assertTrue(reopened['transfers'][0]['paid'])
+        self.assertEqual(reopened['players'], state['players'])
+        self.assertEqual(reopened['total_buyin'], 20000)
+        self.assertEqual(self.store.listing(self.host)['sessions'][0]['unpaid_count'], 0)
+        corrected = self.call(self.path + 'paid', {'transfer_id': transfer['id'], 'paid': False})
+        self.assertEqual(corrected['transfers'][0], transfer)
+        self.assertEqual(self.store.listing(self.host)['sessions'][0]['unpaid_count'], 1)
+        with self.assertRaises(server.UserError):
+            self.call(self.path + 'paid', {'transfer_id': transfer['id'], 'paid': 'false'})
+
+    def test_concurrent_buyin_invalidates_stale_settlement(self):
+        a, b = self.populated()
+
+        def competing_write(row):
+            self.store.add_buyin(row, row['players'][0], '25')
+            row['revision'] += 1
+
+        self.api.conflict = competing_write
+        with self.assertRaises(server.UserError):
+            self.call(self.path + 'settle', {'values': [{'player_id': a, 'amount': '150'}, {'player_id': b, 'amount': '50'}]})
+        result = self.store.get(self.code, self.host)
+        self.assertEqual(result['status'], 'active')
+        self.assertEqual(result['total_buyin'], 22500)
+        self.assertTrue(all(p['cashout'] is None for p in result['players']))
+
+    def test_player_authority_and_private_metadata(self):
+        a, b = self.populated()
+        state = self.call(self.path + 'join', {'name': 'Friend'}, self.friend)
+        mine = state['my_player_id']
+        self.call(self.path + 'buyin', {'player_id': mine, 'amount': '50'}, self.friend)
+        for action, body in [('buyin', {'player_id': a, 'amount': '5'}), ('players', {'name': 'Other'}), ('settle', {})]:
+            with self.assertRaises(server.UserError):
+                self.call(self.path + action, body, self.friend)
+        guest = self.store.get(self.code, 'guest')
+        serialized = json.dumps(guest)
+        for secret in (self.host, self.friend, '_ledger', 'device_hash', 'requests'):
+            self.assertNotIn(secret, serialized)
+        self.assertEqual(self.store.listing('guest')['sessions'], [])
+        self.assertEqual(len(self.store.listing(self.friend)['sessions']), 1)
+
+    def test_rebuy_removal_and_zero_cashout(self):
+        a, b = self.populated()
+        self.call(self.path + 'cashouts', {'values': [{'player_id': a, 'amount': '0'}]})
+        result = self.call(self.path + 'buyin', {'player_id': a, 'amount': '20.25'})
+        self.assertIsNone(result['players'][0]['cashout'])
+        original_entry = dict(result['buyins'][0])
+        entry = result['buyins'][0]['id']
+        result = self.call(self.path + 'undo', {'entry_id': entry})
+        self.assertEqual(result['players'][0]['buyin'], 10000)
+        self.assertTrue(result['buyins'][0]['voided'])
+        self.assertEqual(result['buyins'][0], dict(original_entry, voided=1))
+        result = self.call(self.path + 'settle', {'values': [{'player_id': a, 'amount': '0'}, {'player_id': b, 'amount': '200'}]})
+        self.assertEqual(result['transfers'][0]['amount'], 10000)
+        self.store = SupabaseStore(self.api, server)
+        reopened = self.store.get(self.code, self.host)
+        self.assertEqual(reopened['buyins'][0], dict(original_entry, voided=1))
+        self.assertEqual(self.store.listing(self.host)['sessions'][0]['total_buyin'], 20000)
+
+    def test_import_preserves_ids_ownership_and_does_not_overwrite(self):
+        with tempfile.TemporaryDirectory() as folder:
+            old = server.DB_PATH
+            try:
+                server.DB_PATH = Path(folder) / 'ledger.sqlite3'
+                server.initialise()
+                with server.database() as db:
+                    code = server.mutate(db, '/api/sessions', {'name': 'Local'}, self.host)['code']
+                    path = '/api/sessions/' + code + '/'
+                    server.mutate(db, path + 'players', {'name': 'Imported', 'amount': '99.50'}, self.host)
+                with server.database() as db:
+                    self.assertEqual(self.store.import_local(db), (1, 0))
+                self.assertEqual(self.store.get(code, self.host)['players'][0]['buyin'], 9950)
+                self.call(path + 'buyin', {'player_id': 1, 'amount': '50'})
+                with server.database() as db:
+                    self.assertEqual(self.store.import_local(db), (0, 1))
+                self.assertEqual(self.store.get(code, self.host)['players'][0]['buyin'], 14950)
+            finally:
+                server.DB_PATH = old
+
+
+class ConfigTests(unittest.TestCase):
+    def test_env_is_data_and_does_not_override_exported_variables(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'EXISTING': 'kept'}, clear=True):
+            path = Path(folder) / '.env'
+            path.write_text('EXISTING=changed\nNEW="literal $(no-shell)"\nSCHEMA=public # comment\n')
+            load_env(path)
+            self.assertEqual(os.environ['EXISTING'], 'kept')
+            self.assertEqual(os.environ['NEW'], 'literal $(no-shell)')
+            self.assertEqual(os.environ['SCHEMA'], 'public')
+
+    def test_refuses_insecure_url_and_public_key(self):
+        for url, key in [('http://example.com', 'sb_secret_placeholder'), ('https://example.com/path', 'sb_secret_placeholder'), ('https://example.com', 'sb_publishable_placeholder')]:
+            with self.assertRaises(CloudError):
+                SupabaseAPI(url, key)
+
+
+if __name__ == '__main__':
+    unittest.main()

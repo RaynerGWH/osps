@@ -509,16 +509,19 @@ class Handler(BaseHTTPRequestHandler):
                 match = re.fullmatch(r'/api/sessions/([A-Za-z0-9_-]+)', path)
                 if match:
                     return self.respond(200, CLOUD_STORE.get(match.group(1), device))
-            with database() as db:
-                if path == '/api/leaderboard':
-                    return self.respond(200, leaderboard(db, device))
-                if path == '/api/players':
-                    return self.respond(200, saved_players(db, device))
-                if path == '/api/sessions':
-                    return self.respond(200, listing(db, device, offset))
-                match = re.fullmatch(r'/api/sessions/([A-Za-z0-9_-]+)', path)
-                if match:
-                    return self.respond(200, view(db, match.group(1), device))
+            if path.startswith('/api/'):
+                if CLOUD_STORE is not None:
+                    raise UserError('Not found.', 404)
+                with database() as db:
+                    if path == '/api/leaderboard':
+                        return self.respond(200, leaderboard(db, device))
+                    if path == '/api/players':
+                        return self.respond(200, saved_players(db, device))
+                    if path == '/api/sessions':
+                        return self.respond(200, listing(db, device, offset))
+                    match = re.fullmatch(r'/api/sessions/([A-Za-z0-9_-]+)', path)
+                    if match:
+                        return self.respond(200, view(db, match.group(1), device))
             files = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/styles.css': ('styles.css', 'text/css; charset=utf-8'), '/favicon.svg': ('favicon.svg', 'image/svg+xml')}
             files.update({
                 '/fonts/source-serif-4-latin.woff2': ('fonts/source-serif-4-latin.woff2', 'font/woff2'),

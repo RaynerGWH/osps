@@ -67,23 +67,20 @@ python3 -B server.py --port 8765
 
 The table stores each session's metadata, player list, individual buy-ins, final amounts, and computed transfers. Updates compare and increment the row revision, so simultaneous edits retry against the latest data. Request receipts in private player JSON metadata prevent duplicate buy-ins after a lost response or server restart. Backend access is restricted to the service role. The application checks the host or player identity before every write; raw table data and device hashes never go to the browser. See [Supabase row security](https://supabase.com/docs/guides/database/postgres/row-level-security).
 
-## Deploy from GitHub
+## Deploy on Vercel
 
-The repository holds the application code. [GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages) only serves static websites, so this app needs a Python web host for its API and server-side Supabase connection.
+The repository includes `vercel.json` and a Python function at `api/index.py`, using Vercel's [supported Python handlers](https://vercel.com/docs/functions/runtimes/python/api-directory). Static files are served from `static/`, and `/api/*` requests reach the existing Python backend. Supabase remains the source of truth; hosted requests never fall back to SQLite. Python 3.13 and the Singapore region are configured.
 
-The included [Render Blueprint](https://render.com/docs/blueprint-spec), `render.yaml`, configures the app in Singapore with HTTPS and secure cookies:
+1. Import `RaynerGWH/osps` into Vercel and choose the **Other** framework preset.
+2. Keep the repository root as the root directory. The output directory is `static`, with no build command.
+3. Add `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `SUPABASE_SCHEMA` in the Vercel project's environment variables. Use `public` for the existing schema.
+4. Deploy and open the production URL.
 
-1. In Render, choose **New > Blueprint**, connect GitHub, and select this repository.
-2. Enter `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, and `SUPABASE_SCHEMA` from your local `.env`. Use `public` for the schema if that is where the existing table lives.
-3. Deploy and open the HTTPS URL Render provides.
+No new migration is needed. Secrets stay in Vercel's environment settings and out of GitHub, browser responses, and static files. `.vercelignore` also excludes local credentials, databases, and backups from CLI uploads. Session cookies are always secure on Vercel.
 
-The existing Supabase table and saved sessions are reused. Do not rerun the table creation migration. Credentials belong in Render's environment settings and stay out of GitHub. The startup script requires Supabase settings so a deployment cannot silently fall back to temporary local storage.
+Start new games on the hosted URL. Session ownership uses a browser cookie, so localhost ownership does not automatically transfer to a different domain. Existing data remains in Supabase, but its host controls and history require the original browser cookie. Account login or a secure ownership-transfer feature would be needed to move those controls between domains.
 
-The configuration selects Render's free plan. [Free web services sleep after 15 minutes without inbound traffic](https://render.com/docs/free), so the first visit after a break can take longer. Supabase still retains the game data. Later pushes to `main` redeploy after the GitHub checks pass.
-
-Session ownership currently relies on a browser cookie. A new hosted domain cannot read the cookie from localhost, so existing games will not automatically appear in its history and their host controls will not carry over. Keep the local app available for existing games; start new games on the hosted URL. Account login or a secure ownership-transfer feature is needed to move those controls between domains.
-
-For another Python host, provide the same Supabase settings and run `sh start.sh` behind its HTTPS reverse proxy. The script uses the host's `PORT`, defaulting to `10000`. Local development remains `python3 -B server.py --port 8765`.
+For a conventional Python host, `start.sh` and the earlier Render blueprint remain available. Local development stays `python3 -B server.py --port 8765`.
 
 ## Checks
 

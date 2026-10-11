@@ -1,0 +1,12 @@
+.env
+.env.*
+data/
+work/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.log
+*.sqlite3*
+*-preview.jpg
+.DS_Store

@@ -360,10 +360,19 @@ class SupabaseTests(unittest.TestCase):
         a, b = self.populated()
         state = self.call(self.path + 'join', {'name': 'Friend'}, self.friend)
         mine = state['my_player_id']
-        self.call(self.path + 'buyin', {'player_id': mine, 'amount': '50'}, self.friend)
-        for action, body in [('buyin', {'player_id': a, 'amount': '5'}), ('players', {'name': 'Other'}), ('settle', {})]:
-            with self.assertRaises(server.UserError):
+        state = self.call(self.path + 'buyin', {'player_id': mine, 'amount': '50'}, self.friend)
+        own_entry = next(e['id'] for e in state['buyins'] if e['player'] == mine)
+        other_entry = next(e['id'] for e in state['buyins'] if e['player'] == a)
+        for action, body in [('buyin', {'player_id': a, 'amount': '5'}),
+                             ('undo', {'entry_id': other_entry}),
+                             ('players', {'name': 'Other'}), ('settle', {})]:
+            with self.assertRaises(server.UserError) as error:
                 self.call(self.path + action, body, self.friend)
+            self.assertEqual(error.exception.status, 403)
+        self.assertEqual(self.store.get(self.code, self.friend)['total_buyin'], 25000)
+        state = self.call(self.path + 'undo', {'entry_id': own_entry}, self.friend)
+        self.assertEqual(state['total_buyin'], 20000)
+        self.assertEqual(next(p['buyin'] for p in state['players'] if p['id'] == mine), 0)
         guest = self.store.get(self.code, 'guest')
         serialized = json.dumps(guest)
         for secret in (self.host, self.friend, '_ledger', 'device_hash', 'requests'):

@@ -29,8 +29,9 @@ h1{font:400 clamp(34px,4vw,46px)/1.12 var(--heading-font);letter-spacing:-1.3px;
 .badge{font-size:10px;padding:2px 6px;border:1px solid #536171;border-radius:4px;color:#bdc7d1}
 .status-pill{font-size:11px;padding:3px 9px;border-radius:20px;background:#243329;color:#bbd7bc;line-height:1.4}
 .status-pill.live{background:#20394a;color:#b3d7ee}
-.host-badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid #ace0b638;border-radius:20px;background:#ace0b60c;color:var(--green);font-size:11px;line-height:1.4;white-space:nowrap}
-.host-badge svg{flex:none;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.host-badge,.player-badge{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid #ace0b638;border-radius:20px;background:#ace0b60c;color:var(--green);font-size:11px;line-height:1.4;white-space:nowrap}
+.host-badge svg,.player-badge svg{flex:none;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.player-badge{max-width:100%;white-space:normal;overflow-wrap:anywhere}
 .actions{display:flex;flex-wrap:wrap;max-width:100%;gap:10px;flex-shrink:0;padding-bottom:2px}
 .session-menu{position:relative;flex:none;z-index:2}
 .session-menu summary{display:flex;align-items:center;justify-content:center;list-style:none;width:44px;height:44px;border:1px solid #506273;border-radius:6px;cursor:pointer;color:var(--muted)}

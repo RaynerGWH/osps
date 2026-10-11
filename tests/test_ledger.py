@@ -221,10 +221,19 @@ class LedgerTests(unittest.TestCase):
         s = self.call(self.path + 'join', {'name': 'Friend'}, self.friend)
         own = s['my_player_id']
         self.assertEqual(s['role'], 'player')
-        self.call(self.path + 'buyin', {'player_id': own, 'amount': '50'}, self.friend)
-        for action, body in [('buyin', {'player_id': a, 'amount': '50'}), ('players', {'name': 'X'}), ('settle', {})]:
-            with self.assertRaises(server.UserError):
+        s = self.call(self.path + 'buyin', {'player_id': own, 'amount': '50'}, self.friend)
+        own_entry = next(e['id'] for e in s['buyins'] if e['player'] == own)
+        other_entry = next(e['id'] for e in s['buyins'] if e['player'] == a)
+        for action, body in [('buyin', {'player_id': a, 'amount': '50'}),
+                             ('undo', {'entry_id': other_entry}),
+                             ('players', {'name': 'X'}), ('settle', {})]:
+            with self.assertRaises(server.UserError) as error:
                 self.call(self.path + action, body, self.friend)
+            self.assertEqual(error.exception.status, 403)
+        self.assertEqual(self.get()['total_buyin'], 25000)
+        s = self.call(self.path + 'undo', {'entry_id': own_entry}, self.friend)
+        self.assertEqual(s['total_buyin'], 20000)
+        self.assertEqual(next(p['buyin'] for p in s['players'] if p['id'] == own), 0)
         second = self.call('/api/sessions', {'name': 'Saturday'})['code']
         with self.assertRaises(server.UserError):
             self.call('/api/sessions/' + second + '/buyin', {'player_id': a, 'amount': '50'})

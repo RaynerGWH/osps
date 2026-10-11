@@ -1,1 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#b5fc6d"/><path d="M32 9C25 19 12 25 12 36c0 10 13 15 19 4-1 9-5 13-9 15h20c-5-3-8-7-9-15 7 11 19 6 19-4C52 25 39 19 32 9Z" fill="#11131c"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 88" fill="none">
+  <title>6 of hearts and 7 of spades</title>
+  <g stroke="#17242d" stroke-width="3.5" stroke-linejoin="round">
+    <g transform="rotate(-14 30 43)">
+      <rect x="10" y="13" width="43" height="65" rx="8" fill="#17242d"/>
+      <rect x="8" y="9" width="43" height="65" rx="8" fill="#fff3dd"/>
+      <path d="M29 20c-8-4-13 3-13 10 0 5 2 8 6 8 8 0 8-12 1-12-4 0-7 3-7 6" stroke="#e85b62" stroke-width="4.2" stroke-linecap="round"/>
+      <path d="M29 64c-4-4-13-10-13-16 0-8 10-9 13-2 3-7 13-6 13 2 0 6-9 12-13 16Z" fill="#e85b62" stroke="none"/>
+    </g>
+    <g transform="rotate(12 64 46)">
+      <rect x="44" y="16" width="43" height="65" rx="8" fill="#17242d"/>
+      <rect x="42" y="12" width="43" height="65" rx="8" fill="#fffbef"/>
+      <path d="M51 23h14L54 41" stroke-width="4.2" stroke-linecap="round"/>
+      <path d="M64 43c-4 6-13 10-13 17 0 6 8 9 12 3 0 4-2 7-5 9h12c-3-2-5-5-5-9 4 6 12 3 12-3 0-7-9-11-13-17Z" fill="#17242d" stroke="none"/>
+    </g>
+  </g>
+</svg>

@@ -50,7 +50,7 @@ function currentSessionCode(){
 function renderNavigation(){
   const current=state.session.code===currentSessionCode();
   $('#site-nav').innerHTML=`<nav class="topbar" aria-label="Main navigation"><div class="nav-inner">
-    <span class="wordmark"><img src="/favicon.svg" alt="" width="21" height="21">o$p$</span>
+    <span class="wordmark"><img src="/favicon.svg?v=67" alt="" width="48" height="44">o$p$</span>
     <div class="nav-links"><button class="nav-link ${current?'active':''}" data-action="current" ${current?'aria-current="page"':''}>Current session</button><button class="nav-link ${current?'':'active'}" data-action="history" ${current?'':'aria-current="page"'}>History</button></div>
     <button class="button new-session" data-action="new"><span aria-hidden="true">+</span> New session</button>
   </div></nav>`;

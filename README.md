@@ -1,6 +1,9 @@
 # o$p$
 
-<img width="1728" height="1000" alt="image" src="https://github.com/user-attachments/assets/e3053254-08a8-4532-b2e7-ad39457da257" />
+<img width="1728" height="876" alt="image" src="https://github.com/user-attachments/assets/4d965bf4-a476-4e66-abc4-a3c31025da41" />
+
+<img width="1728" height="672" alt="image" src="https://github.com/user-attachments/assets/82f5c81b-6622-47a6-ae68-396616a7cac2" />
+
 
 A small session ledger with buy-ins, rebuys, final chip values, and settlement.
 
